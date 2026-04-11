@@ -1,0 +1,25 @@
+import asyncio
+import contextlib
+import io
+import json
+import sys
+
+from ai_news_spider.models import SiteSpec
+from ai_news_spider.runtime import run_site_spec
+
+SPEC = SiteSpec.model_validate_json(r'''{{ spec_json }}''')
+
+
+async def main() -> None:
+    payload = json.load(sys.stdin)
+    noisy_stdout = io.StringIO()
+    with contextlib.redirect_stdout(noisy_stdout):
+        result = await run_site_spec(SPEC, payload)
+    captured = noisy_stdout.getvalue().strip()
+    if captured:
+        print(captured, file=sys.stderr)
+    json.dump(result, sys.stdout, ensure_ascii=False)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

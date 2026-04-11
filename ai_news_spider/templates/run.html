@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}运行详情{% endblock %}
+{% block content %}
+  <div class="grid">
+    <section class="card">
+      <div class="actions" style="justify-content: space-between; align-items: center;">
+        <div>
+          <h1>运行 #{{ run.id }}</h1>
+          <p class="muted">
+            {{ run.site_name }} · v{{ run.version_no }} · {{ run.run_type }}
+            · <strong class="status-{{ run.status }}">{{ run.status }}</strong>
+          </p>
+        </div>
+        <a href="/sites">返回管理页</a>
+      </div>
+      <table>
+        <tr><th>种子 URL</th><td><a href="{{ run.seed_url }}">{{ run.seed_url }}</a></td></tr>
+        <tr><th>开始时间</th><td>{{ run.started_at }}</td></tr>
+        <tr><th>结束时间</th><td>{{ run.finished_at or "-" }}</td></tr>
+        <tr><th>停止原因</th><td>{{ run.stats_json["stop_reason"] }}</td></tr>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>规则摘要</h2>
+      <pre>{{ run.spec_json | tojson(indent=2) }}</pre>
+    </section>
+
+    <section class="card">
+      <h2>抽取结果</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>标题</th>
+            <th>发布时间</th>
+            <th>来源页</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in run.result_json["items"] %}
+            <tr>
+              <td><a href="{{ item.url }}">{{ item.title }}</a></td>
+              <td>{{ item.published_at or "-" }}</td>
+              <td><a href="{{ item.source_list_url }}">列表页</a></td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="3" class="muted">当前运行没有抽取到任何条目。</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>人工审核动作</h2>
+      <div class="actions">
+        <form method="post" action="/versions/{{ run.version_id }}/approve">
+          <button type="submit">保存为正式版本</button>
+        </form>
+      </div>
+      <form method="post" action="/versions/{{ run.version_id }}/regenerate">
+        <label>
+          列表定位器
+          <textarea
+            name="list_locator_hint"
+            placeholder="例如：.class-list、//div[@class='class-list']、/html[1]/body[1]/div[4]/div[1]/div[1]/div[2]"
+            required
+          >{{ run.site_notes or "" }}</textarea>
+        </label>
+        <button class="secondary" type="submit">再次生成爬虫</button>
+      </form>
+    </section>
+  </div>
+{% endblock %}
