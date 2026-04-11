@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Literal
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 SchedulerMode = Literal["daily", "hourly"]
 
@@ -30,6 +32,7 @@ class Settings:
     @classmethod
     def from_env(cls, base_dir: Path | None = None) -> "Settings":
         root = (base_dir or Path(__file__).resolve().parent.parent).resolve()
+        load_dotenv(root / ".env", override=False)
         data_dir = root / "data"
         runtime_dir = data_dir / "runtime"
         return cls(

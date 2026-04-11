@@ -70,51 +70,64 @@
 uv sync
 ```
 
-## 环境变量
+## 配置方式
 
-至少需要配置 LLM 接口：
+系统默认从项目根目录 `.env` 文件读取配置。  
+建议先复制模板文件：
 
 ```bash
-export BASE_URL="https://yunwu.ai"
-export API_KEY="your-api-key"
-export MODEL_NAME="gpt-5-mini"
+cp .env.example .env
+```
+
+然后编辑 `.env`：
+
+```dotenv
+HOST=127.0.0.1
+PORT=8000
+TIMEZONE=Asia/Shanghai
+LOG_LEVEL=INFO
+
+BASE_URL=https://yunwu.ai
+API_KEY=your-api-key
+MODEL_NAME=gpt-5-mini
+
+SCHEDULER_MODE=daily
+SCHEDULER_HOUR=9
+SCHEDULER_MINUTE=0
+SCHEDULER_INTERVAL_HOURS=1
 ```
 
 系统会自动把 `BASE_URL=https://yunwu.ai` 归一化成 `https://yunwu.ai/v1`。
 
-常用运行配置：
+说明：
 
-```bash
-export HOST="127.0.0.1"
-export PORT="8000"
-export TIMEZONE="Asia/Shanghai"
-export LOG_LEVEL="INFO"
-```
+- `.env` 中的配置会在启动时自动加载
+- 如果同名系统环境变量已经存在，系统环境变量优先级更高
 
 调度配置支持两种模式。
 
 每天一次：
 
-```bash
-export SCHEDULER_MODE="daily"
-export SCHEDULER_HOUR="9"
-export SCHEDULER_MINUTE="0"
+```dotenv
+SCHEDULER_MODE=daily
+SCHEDULER_HOUR=9
+SCHEDULER_MINUTE=0
 ```
 
 每小时一次或每 N 小时一次：
 
-```bash
-export SCHEDULER_MODE="hourly"
-export SCHEDULER_INTERVAL_HOURS="1"
-export SCHEDULER_MINUTE="0"
+```dotenv
+SCHEDULER_MODE=hourly
+SCHEDULER_INTERVAL_HOURS=1
+SCHEDULER_MINUTE=0
 ```
 
 例如每 3 小时一次：
 
-```bash
-export SCHEDULER_MODE="hourly"
-export SCHEDULER_INTERVAL_HOURS="3"
-export SCHEDULER_MINUTE="15"
+```dotenv
+SCHEDULER_MODE=hourly
+SCHEDULER_INTERVAL_HOURS=3
+SCHEDULER_MINUTE=15
 ```
 
 ## 启动方式

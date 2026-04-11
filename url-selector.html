@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URL 页面选择器 Demo</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --line: #334155;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --brand: #22c55e;
+      --brand-2: #16a34a;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --hover: #38bdf8;
+      --selected: #22c55e;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #0b1220 0%, #111827 100%);
+      color: var(--text);
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      height: 100vh;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .toolbar, .hint, .bottom-panel {
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .toolbar {
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .url-input {
+      width: 100%;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #020617;
+      color: var(--text);
+      padding: 0 14px;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .url-input:focus {
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15);
+    }
+
+    button {
+      height: 44px;
+      border: 0;
+      border-radius: 12px;
+      padding: 0 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .12s ease, opacity .12s ease, background .12s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
+
+    .btn-primary { background: var(--brand); color: #052e16; }
+    .btn-primary:hover { background: var(--brand-2); }
+    .btn-ghost { background: #0b1220; color: var(--text); border: 1px solid var(--line); }
+    .btn-ghost.active { background: rgba(34, 197, 94, .12); border-color: rgba(34, 197, 94, .5); color: #bbf7d0; }
+    .btn-copy { background: rgba(56, 189, 248, .14); color: #bae6fd; border: 1px solid rgba(56, 189, 248, .3); }
+
+    .hint {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      align-items: center;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--warning);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, .14);
+      flex: 0 0 auto;
+    }
+
+    .dot.ok { background: var(--brand); box-shadow: 0 0 0 3px rgba(34, 197, 94, .14); }
+    .dot.fail { background: var(--danger); box-shadow: 0 0 0 3px rgba(239, 68, 68, .16); }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 12px;
+    }
+
+    .viewport,
+    .bottom-panel {
+      min-height: 0;
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .frame-wrap {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .frame-bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      color: var(--muted);
+      font-size: 12px;
+      background: rgba(2, 6, 23, 0.55);
+    }
+
+    .bubble {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #ef4444;
+      box-shadow: 18px 0 0 #f59e0b, 36px 0 0 #22c55e;
+      margin-right: 34px;
+      flex: 0 0 auto;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: white;
+    }
+
+    .bottom-panel {
+      padding: 14px;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr;
+      gap: 12px;
+    }
+
+    .panel-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: white;
+      margin: 0;
+    }
+
+    .panel-subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field label {
+      color: #cbd5e1;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .03em;
+      text-transform: uppercase;
+    }
+
+    textarea, .meta-box {
+      width: 100%;
+      min-height: 86px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #020617;
+      color: #e2e8f0;
+      padding: 12px;
+      resize: vertical;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .meta-box {
+      min-height: 110px;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .footer-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .footer-note strong { color: #e5e7eb; }
+
+    @media (max-width: 980px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(420px, 1fr) auto;
+      }
+      .toolbar {
+        grid-template-columns: 1fr 1fr;
+      }
+      .toolbar .url-input {
+        grid-column: 1 / -1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="toolbar">
+      <input id="urlInput" class="url-input" type="url" placeholder="输入新闻列表页 URL，例如 https://example.com/news" />
+      <button id="visitBtn" class="btn-primary">访问</button>
+      <button id="selectorBtn" class="btn-ghost active">选择模式：开启</button>
+      <button id="loadDemoBtn" class="btn-ghost">加载内置示例</button>
+    </div>
+
+    <div class="hint">
+      <div class="status" id="statusWrap">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">等待输入 URL。说明：这版是纯前端 Demo，只能处理“允许浏览器跨域抓取 HTML”的页面。</span>
+      </div>
+      <div>悬浮高亮，点击元素后输出 CSS Selector / XPath</div>
+    </div>
+
+    <div class="workspace">
+      <div class="viewport">
+        <div class="frame-wrap">
+          <div class="frame-bar">
+            <span class="bubble"></span>
+            <span id="frameUrlText">尚未加载页面</span>
+          </div>
+          <iframe id="previewFrame" sandbox="allow-same-origin allow-forms allow-popups allow-modals allow-downloads"></iframe>
+        </div>
+      </div>
+
+      <aside class="bottom-panel">
+        <div>
+          <h2 class="panel-title">选择结果</h2>
+          <p class="panel-subtitle">这版实现了最核心的点选能力：鼠标悬浮高亮、点击选中、输出 CSS / XPath。更复杂的“训练式 selector 推荐”要再加算法。</p>
+        </div>
+
+        <div class="field">
+          <label for="cssOutput">CSS Selector</label>
+          <textarea id="cssOutput" readonly placeholder="点击页面里的元素后，这里会出现 CSS Selector"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="xpathOutput">XPath Selector</label>
+          <textarea id="xpathOutput" readonly placeholder="点击页面里的元素后，这里会出现 XPath"></textarea>
+        </div>
+
+        <div class="actions">
+          <button id="copyCssBtn" class="btn-copy">复制 CSS Selector</button>
+          <button id="copyXpathBtn" class="btn-copy">复制 XPath Selector</button>
+        </div>
+
+        <div class="field">
+          <label>元素信息</label>
+          <div id="metaOutput" class="meta-box">尚未选择元素</div>
+        </div>
+
+        <div class="footer-note">
+          <strong>实话实说：</strong> 对任意第三方网站，普通网页做不到像浏览器扩展那样稳定地读取 DOM。<br />
+          这版适合：同源页面、允许 CORS 抓取的页面，或你自己控制的网站。<br />
+          真要覆盖任意站点，建议下一步改成：<strong>浏览器扩展</strong> 或 <strong>服务端代理 + 前端查看器</strong>。
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const urlInput = document.getElementById('urlInput');
+    const visitBtn = document.getElementById('visitBtn');
+    const selectorBtn = document.getElementById('selectorBtn');
+    const loadDemoBtn = document.getElementById('loadDemoBtn');
+    const previewFrame = document.getElementById('previewFrame');
+    const frameUrlText = document.getElementById('frameUrlText');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const cssOutput = document.getElementById('cssOutput');
+    const xpathOutput = document.getElementById('xpathOutput');
+    const metaOutput = document.getElementById('metaOutput');
+    const copyCssBtn = document.getElementById('copyCssBtn');
+    const copyXpathBtn = document.getElementById('copyXpathBtn');
+
+    let selectorMode = true;
+    let frameState = {
+      cleanup: null,
+      lastUrl: '',
+      selectedElement: null,
+    };
+
+    const DEMO_HTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>内置新闻列表示例</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 28px 18px 50px; }
+    .hero { background: white; border-radius: 18px; padding: 24px; box-shadow: 0 10px 30px rgba(15, 23, 42, .08); margin-bottom: 20px; }
+    .hero h1 { margin: 0 0 8px; font-size: 30px; }
+    .hero p { margin: 0; color: #475569; }
+    .news-list { display: grid; gap: 14px; }
+    .news-card { background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 18px; box-shadow: 0 4px 20px rgba(15,23,42,.04); }
+    .news-card a { text-decoration: none; color: #0f172a; }
+    .news-card h2 { margin: 0 0 8px; font-size: 22px; }
+    .meta { display: flex; gap: 14px; color: #64748b; font-size: 14px; margin-bottom: 10px; }
+    .tag { display: inline-block; background: #ecfeff; color: #0f766e; border-radius: 999px; padding: 6px 10px; font-size: 12px; margin-top: 6px; }
+    .pagination { display: flex; gap: 8px; justify-content: center; margin-top: 22px; }
+    .pagination a { background: white; color: #334155; padding: 10px 14px; border-radius: 12px; text-decoration: none; border: 1px solid #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>科技新闻列表</h1>
+      <p>这是一个内置示例页面，你可以直接测试“标题 / 链接 / 发布时间”的 selector 选取。</p>
+    </section>
+
+    <section class="news-list">
+      <article class="news-card item-card">
+        <a class="item-link" href="/articles/101">
+          <h2 class="item-title">国产 AI Agent 工具链进入规模化实战阶段</h2>
+        </a>
+        <div class="meta">
+          <time class="publish-time" datetime="2026-04-11">2026-04-11</time>
+          <span class="source">AI 开发周刊</span>
+        </div>
+        <p class="summary">多家团队开始将 agent workflow 用于真实生产，而不再只是 demo。</p>
+        <span class="tag">AI</span>
+      </article>
+
+      <article class="news-card item-card">
+        <a class="item-link" href="/articles/102">
+          <h2 class="item-title">浏览器端网页结构提取方案持续演进</h2>
+        </a>
+        <div class="meta">
+          <time class="publish-time" datetime="2026-04-10">2026-04-10</time>
+          <span class="source">前端观察</span>
+        </div>
+        <p class="summary">越来越多的工具开始尝试将 selector 识别、内容抽取与人工复核结合。</p>
+        <span class="tag">前端</span>
+      </article>
+
+      <article class="news-card item-card">
+        <a class="item-link" href="/articles/103">
+          <h2 class="item-title">低代码爬虫平台开始强调“人工审核 + 自动化”</h2>
+        </a>
+        <div class="meta">
+          <time class="publish-time" datetime="2026-04-09">2026-04-09</time>
+          <span class="source">数据工程内参</span>
+        </div>
+        <p class="summary">越来越多平台不再追求全自动，而是把“人确认 selector”放到关键闭环里。</p>
+        <span class="tag">爬虫</span>
+      </article>
+    </section>
+
+    <nav class="pagination">
+      <a href="?page=1">1</a>
+      <a href="?page=2">2</a>
+      <a href="?page=3">3</a>
+    </nav>
+  </div>
+</body>
+</html>`;
+
+    function setStatus(type, text) {
+      statusText.textContent = text;
+      statusDot.className = 'dot';
+      if (type === 'ok') statusDot.classList.add('ok');
+      if (type === 'fail') statusDot.classList.add('fail');
+    }
+
+    function normalizeUrl(input) {
+      const value = input.trim();
+      if (!value) throw new Error('请输入 URL');
+      return new URL(value).toString();
+    }
+
+    function injectBase(html, baseUrl) {
+      const baseTag = `<base href="${baseUrl.replace(/"/g, '&quot;')}">`;
+      if (/<head[^>]*>/i.test(html)) {
+        return html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+      }
+      if (/<html[^>]*>/i.test(html)) {
+        return html.replace(/<html([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+      }
+      return `<!doctype html><html><head>${baseTag}</head><body>${html}</body></html>`;
+    }
+
+    function stripActiveContent(html) {
+      let output = html;
+      output = output.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+      output = output.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+      output = output.replace(/<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi, '');
+      return output;
+    }
+
+    function buildSrcdoc(html, url) {
+      const safe = stripActiveContent(injectBase(html, url));
+      return safe;
+    }
+
+    function copyText(text) {
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        const previous = statusText.textContent;
+        setStatus('ok', '已复制到剪贴板。');
+        setTimeout(() => setStatus('ok', previous), 1200);
+      }).catch(() => {
+        setStatus('fail', '复制失败，可能是浏览器权限限制。');
+      });
+    }
+
+    function elementLabel(el) {
+      if (!el || el.nodeType !== 1) return '无';
+      const tag = el.tagName.toLowerCase();
+      const id = el.id ? `#${el.id}` : '';
+      const cls = el.classList?.length ? '.' + Array.from(el.classList).slice(0, 4).join('.') : '';
+      return `${tag}${id}${cls}`;
+    }
+
+    function getXPath(el) {
+      if (!el || el.nodeType !== 1) return '';
+      if (el.id) return `//*[@id="${el.id.replace(/"/g, '\\"')}"]`;
+
+      const segments = [];
+      let node = el;
+      while (node && node.nodeType === 1) {
+        const tag = node.tagName.toLowerCase();
+        let index = 1;
+        let sib = node.previousElementSibling;
+        while (sib) {
+          if (sib.tagName === node.tagName) index += 1;
+          sib = sib.previousElementSibling;
+        }
+        segments.unshift(`${tag}[${index}]`);
+        node = node.parentElement;
+      }
+      return '/' + segments.join('/');
+    }
+
+    function isUniqueSelector(selector, doc) {
+      try {
+        return doc.querySelectorAll(selector).length === 1;
+      } catch {
+        return false;
+      }
+    }
+
+    function getCssSelector(el) {
+      if (!el || el.nodeType !== 1) return '';
+      const doc = el.ownerDocument;
+
+      if (el.id) {
+        const selector = `#${CSS.escape(el.id)}`;
+        if (isUniqueSelector(selector, doc)) return selector;
+      }
+
+      const path = [];
+      let node = el;
+      while (node && node.nodeType === 1 && node.tagName.toLowerCase() !== 'html') {
+        let segment = node.tagName.toLowerCase();
+
+        if (node.id) {
+          segment += `#${CSS.escape(node.id)}`;
+          path.unshift(segment);
+          const selector = path.join(' > ');
+          if (isUniqueSelector(selector, doc)) return selector;
+          node = node.parentElement;
+          continue;
+        }
+
+        const classes = Array.from(node.classList || []).filter(Boolean).slice(0, 3);
+        if (classes.length) {
+          const classSelector = classes.map(c => `.${CSS.escape(c)}`).join('');
+          const candidate = `${segment}${classSelector}`;
+          path.unshift(candidate);
+          const selector = path.join(' > ');
+          if (isUniqueSelector(selector, doc)) return selector;
+          path.shift();
+        }
+
+        let index = 1;
+        let sib = node.previousElementSibling;
+        while (sib) {
+          if (sib.tagName === node.tagName) index += 1;
+          sib = sib.previousElementSibling;
+        }
+        segment += `:nth-of-type(${index})`;
+        path.unshift(segment);
+        const selector = path.join(' > ');
+        if (isUniqueSelector(selector, doc)) return selector;
+
+        node = node.parentElement;
+      }
+      return path.join(' > ');
+    }
+
+    function updateOutputs(el) {
+      const css = getCssSelector(el);
+      const xpath = getXPath(el);
+      cssOutput.value = css;
+      xpathOutput.value = xpath;
+
+      const rect = el.getBoundingClientRect();
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 180);
+      const attrs = Array.from(el.attributes || []).slice(0, 10).map(a => `${a.name}="${a.value}"`).join('\n');
+      metaOutput.textContent = [
+        `标签: ${el.tagName.toLowerCase()}`,
+        `类名: ${Array.from(el.classList || []).join(' ') || '(无)'}`,
+        `尺寸: ${Math.round(rect.width)} × ${Math.round(rect.height)}`,
+        `文本: ${text || '(无文本)'}`,
+        `属性:\n${attrs || '(无属性)'}`
+      ].join('\n\n');
+    }
+
+    function clearFrameHooks() {
+      if (typeof frameState.cleanup === 'function') {
+        frameState.cleanup();
+      }
+      frameState.cleanup = null;
+      frameState.selectedElement = null;
+    }
+
+    function attachInspector() {
+      clearFrameHooks();
+
+      const doc = previewFrame.contentDocument;
+      const win = previewFrame.contentWindow;
+      if (!doc || !win) {
+        setStatus('fail', '当前 iframe 不可访问 DOM，无法启用选择器。');
+        return;
+      }
+
+      const style = doc.createElement('style');
+      style.textContent = `
+        .__selector_hover_box__, .__selector_selected_box__ {
+          position: absolute;
+          pointer-events: none;
+          z-index: 2147483647;
+          box-sizing: border-box;
+        }
+        .__selector_hover_box__ {
+          border: 2px solid ${getComputedStyle(document.documentElement).getPropertyValue('--hover').trim() || '#38bdf8'};
+          background: rgba(56, 189, 248, 0.12);
+        }
+        .__selector_selected_box__ {
+          border: 2px solid ${getComputedStyle(document.documentElement).getPropertyValue('--selected').trim() || '#22c55e'};
+          background: rgba(34, 197, 94, 0.12);
+        }
+      `;
+      doc.head.appendChild(style);
+
+      const hoverBox = doc.createElement('div');
+      hoverBox.className = '__selector_hover_box__';
+      const selectedBox = doc.createElement('div');
+      selectedBox.className = '__selector_selected_box__';
+      doc.body.appendChild(hoverBox);
+      doc.body.appendChild(selectedBox);
+
+      function placeBox(box, el) {
+        if (!el || el === doc.documentElement || el === doc.body) {
+          box.style.display = 'none';
+          return;
+        }
+        const rect = el.getBoundingClientRect();
+        box.style.display = 'block';
+        box.style.left = `${rect.left + win.scrollX}px`;
+        box.style.top = `${rect.top + win.scrollY}px`;
+        box.style.width = `${rect.width}px`;
+        box.style.height = `${rect.height}px`;
+      }
+
+      function onMouseMove(event) {
+        if (!selectorMode) return;
+        const el = event.target;
+        if (!(el instanceof win.Element)) return;
+        if (el === hoverBox || el === selectedBox) return;
+        placeBox(hoverBox, el);
+      }
+
+      function onClick(event) {
+        if (!selectorMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        const el = event.target;
+        if (!(el instanceof win.Element)) return;
+        if (el === hoverBox || el === selectedBox) return;
+        frameState.selectedElement = el;
+        placeBox(selectedBox, el);
+        updateOutputs(el);
+      }
+
+      function onScroll() {
+        if (frameState.selectedElement) placeBox(selectedBox, frameState.selectedElement);
+      }
+
+      doc.addEventListener('mousemove', onMouseMove, true);
+      doc.addEventListener('click', onClick, true);
+      win.addEventListener('scroll', onScroll, true);
+      win.addEventListener('resize', onScroll, true);
+
+      frameState.cleanup = () => {
+        doc.removeEventListener('mousemove', onMouseMove, true);
+        doc.removeEventListener('click', onClick, true);
+        win.removeEventListener('scroll', onScroll, true);
+        win.removeEventListener('resize', onScroll, true);
+      };
+
+      setStatus('ok', '页面已加载，可以开始点选元素。');
+    }
+
+    async function loadWithSrcdoc(html, url, sourceLabel) {
+      clearFrameHooks();
+      frameState.lastUrl = url;
+      frameUrlText.textContent = sourceLabel || url;
+      previewFrame.srcdoc = buildSrcdoc(html, url);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      previewFrame.onload = () => attachInspector();
+      setTimeout(() => {
+        try { attachInspector(); } catch (e) { console.error(e); }
+      }, 200);
+    }
+
+    async function loadRemoteUrl(url) {
+      visitBtn.disabled = true;
+      setStatus('', '正在抓取页面 HTML...');
+      frameUrlText.textContent = url;
+      cssOutput.value = '';
+      xpathOutput.value = '';
+      metaOutput.textContent = '尚未选择元素';
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          mode: 'cors',
+          credentials: 'omit',
+          redirect: 'follow'
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+          throw new Error(`目标返回的不是 HTML，而是 ${contentType || '未知内容类型'}`);
+        }
+
+        const html = await response.text();
+        await loadWithSrcdoc(html, url, url);
+      } catch (error) {
+        console.error(error);
+        previewFrame.srcdoc = `<!doctype html><html><body style="font-family:system-ui;padding:32px;line-height:1.7;background:#fff7ed;color:#7c2d12;">
+          <h2>加载失败</h2>
+          <p><strong>原因：</strong>${escapeHtml(error.message || '未知错误')}</p>
+          <p>这通常不是你代码写错了，而是浏览器安全边界导致的：</p>
+          <ul>
+            <li>目标站点没有开放 CORS，浏览器不允许前端 <code>fetch()</code> 拿到 HTML</li>
+            <li>即便 iframe 能显示，跨域 iframe 也不能被当前页面读取 DOM</li>
+            <li>很多网站还会禁止被 iframe 嵌入</li>
+          </ul>
+          <p>建议下一步改为：服务端代理抓取 HTML，再由前端查看器做点选。</p>
+        </body></html>`;
+        setStatus('fail', '加载失败：目标站点大概率禁止纯前端跨域抓取或嵌入。');
+      } finally {
+        visitBtn.disabled = false;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function updateSelectorModeButton() {
+      selectorBtn.classList.toggle('active', selectorMode);
+      selectorBtn.textContent = `选择模式：${selectorMode ? '开启' : '关闭'}`;
+      setStatus('ok', selectorMode ? '选择模式已开启。' : '选择模式已关闭。');
+    }
+
+    visitBtn.addEventListener('click', async () => {
+      try {
+        const url = normalizeUrl(urlInput.value);
+        await loadRemoteUrl(url);
+      } catch (error) {
+        setStatus('fail', error.message || 'URL 无效');
+      }
+    });
+
+    urlInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') visitBtn.click();
+    });
+
+    selectorBtn.addEventListener('click', () => {
+      selectorMode = !selectorMode;
+      updateSelectorModeButton();
+    });
+
+    loadDemoBtn.addEventListener('click', async () => {
+      urlInput.value = 'https://demo.local/news';
+      setStatus('', '正在加载内置示例页面...');
+      await loadWithSrcdoc(DEMO_HTML, 'https://demo.local/news', '内置新闻列表示例');
+    });
+
+    copyCssBtn.addEventListener('click', () => copyText(cssOutput.value));
+    copyXpathBtn.addEventListener('click', () => copyText(xpathOutput.value));
+
+    previewFrame.addEventListener('load', () => {
+      try { attachInspector(); } catch (e) { console.error(e); }
+    });
+
+    // 默认先加载内置示例，方便直接试用。
+    loadWithSrcdoc(DEMO_HTML, 'https://demo.local/news', '内置新闻列表示例');
+  </script>
+</body>
+</html>

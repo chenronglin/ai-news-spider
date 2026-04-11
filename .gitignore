@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .agents
+.env
 data/app.db
 data/runtime/
 .pytest_cache/

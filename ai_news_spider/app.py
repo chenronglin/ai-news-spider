@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from ai_news_spider.config import Settings
@@ -66,6 +67,44 @@ def build_app(
                 "scheduler_description": settings.scheduler_description(),
             },
         )
+
+    @app.get("/tools/url-selector", response_class=HTMLResponse)
+    async def url_selector(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "url_selector.html",
+            {
+                "proxy_endpoint": str(request.url_for("proxy_html")),
+            },
+        )
+
+    @app.get("/api/proxy/html", response_class=JSONResponse)
+    async def proxy_html(url: str, wait_for: str | None = None) -> JSONResponse:
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return JSONResponse(
+                {"error": "url must be an absolute http/https URL"},
+                status_code=400,
+            )
+        try:
+            html, _, _, final_url = await crawler.fetch_html(
+                url,
+                requires_js=True,
+                wait_for=wait_for,
+            )
+            return JSONResponse(
+                {
+                    "url": url,
+                    "final_url": final_url,
+                    "html": html,
+                    "rendered_by": "crawl4ai",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                {"error": f"proxy fetch failed: {exc}"},
+                status_code=502,
+            )
 
     @app.post("/sites")
     async def create_site(request: Request) -> Response:

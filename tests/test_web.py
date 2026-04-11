@@ -39,3 +39,21 @@ def test_web_flow_generate_approve_and_run(settings, fixture_map) -> None:
 
         prod_response = client.post("/sites/1/run", follow_redirects=False)
         assert prod_response.status_code == 303
+
+
+def test_url_selector_page_and_proxy(settings, fixture_map) -> None:
+    app = build_app(
+        settings=settings,
+        spec_generator=HeuristicSiteSpecGenerator(),
+        with_scheduler=False,
+    )
+    with TestClient(app) as client:
+        tool_response = client.get("/tools/url-selector")
+        assert tool_response.status_code == 200
+        assert "服务端代理抓取 HTML" in tool_response.text
+
+        proxy_response = client.get("/api/proxy/html", params={"url": FIXTURE_URL_1})
+        assert proxy_response.status_code == 200
+        payload = proxy_response.json()
+        assert payload["url"] == FIXTURE_URL_1
+        assert "第一条新闻" in payload["html"]
