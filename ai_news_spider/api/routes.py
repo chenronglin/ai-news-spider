@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from secrets import compare_digest
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from ai_news_spider.api.schemas import (
     ApiError,
@@ -33,9 +34,22 @@ from ai_news_spider.api.schemas import (
 )
 from ai_news_spider.services import ServiceContainer
 
+API_TOKEN_HEADER_NAME = "X-API-Token"
+
 
 def get_services(request: Request) -> ServiceContainer:
     return request.app.state.services
+
+
+def require_api_token(
+    request: Request,
+    x_api_token: str | None = Header(default=None, alias=API_TOKEN_HEADER_NAME),
+) -> None:
+    configured_token = request.app.state.settings.api_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="api token is not configured")
+    if x_api_token is None or not compare_digest(x_api_token, configured_token):
+        raise HTTPException(status_code=401, detail="invalid api token")
 
 
 def build_page_meta(payload: dict) -> PageMeta:
@@ -47,9 +61,10 @@ def build_page_meta(payload: dict) -> PageMeta:
 
 
 def create_api_router() -> APIRouter:
-    router = APIRouter(prefix="/api/v1")
+    public_router = APIRouter(prefix="/api/v1")
+    router = APIRouter(dependencies=[Depends(require_api_token)])
 
-    @router.get(
+    @public_router.get(
         "/health",
         response_model=HealthResponse,
         tags=["系统"],
@@ -611,4 +626,5 @@ def create_api_router() -> APIRouter:
             )
         return TaskDetail.model_validate(payload)
 
-    return router
+    public_router.include_router(router)
+    return public_router

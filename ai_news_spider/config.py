@@ -27,6 +27,7 @@ class Settings:
     log_level: str
     base_url: str | None
     api_key: str | None
+    api_token: str | None
     model_name: str
 
     @classmethod
@@ -54,6 +55,7 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             base_url=cls.normalize_base_url(os.getenv("BASE_URL")),
             api_key=os.getenv("API_KEY"),
+            api_token=os.getenv("API_TOKEN"),
             model_name=os.getenv("MODEL_NAME", "gpt-5-mini"),
         )
 

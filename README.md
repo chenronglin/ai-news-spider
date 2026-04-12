@@ -155,6 +155,7 @@ LOG_LEVEL=INFO
 
 BASE_URL=https://yunwu.ai
 API_KEY=your-api-key
+API_TOKEN=change-this-token
 MODEL_NAME=gpt-5-mini
 
 SCHEDULER_MODE=daily
@@ -168,6 +169,7 @@ SCHEDULER_INTERVAL_HOURS=1
 - `BASE_URL=https://yunwu.ai` 会自动归一化为 `https://yunwu.ai/v1`
 - `.env` 配置会在启动时自动加载
 - 如果同名系统环境变量已存在，系统环境变量优先
+- 除 `GET /api/v1/health` 外，其余 `/api/v1/*` 接口都需要在请求头里携带 `X-API-Token: <API_TOKEN>`
 
 调度支持两种模式。
 
@@ -268,6 +270,7 @@ uv run main.py
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/sites \
   -H "Content-Type: application/json" \
+  -H "X-API-Token: change-this-token" \
   -d '{
     "seed_url": "https://example.com/list.htm",
     "list_locator_hint": ".news-list"
@@ -290,7 +293,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/sites \
 ### 2. 轮询任务结果
 
 ```bash
-curl http://127.0.0.1:8000/api/v1/tasks/1
+curl http://127.0.0.1:8000/api/v1/tasks/1 \
+  -H "X-API-Token: change-this-token"
 ```
 
 任务完成后，`result_json` 中会包含：
@@ -308,7 +312,8 @@ curl http://127.0.0.1:8000/api/v1/tasks/1
 ### 3. 查看预览结果
 
 ```bash
-curl http://127.0.0.1:8000/api/v1/runs/1
+curl http://127.0.0.1:8000/api/v1/runs/1 \
+  -H "X-API-Token: change-this-token"
 ```
 
 `RunDetail` 中会包含：
@@ -323,13 +328,15 @@ curl http://127.0.0.1:8000/api/v1/runs/1
 ### 4. 审批版本
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/versions/1/approve
+curl -X POST http://127.0.0.1:8000/api/v1/versions/1/approve \
+  -H "X-API-Token: change-this-token"
 ```
 
 ### 5. 触发正式运行
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/sites/1/runs
+curl -X POST http://127.0.0.1:8000/api/v1/sites/1/runs \
+  -H "X-API-Token: change-this-token"
 ```
 
 ## 运行结果 JSON 结构

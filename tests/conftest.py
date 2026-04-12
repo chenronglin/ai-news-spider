@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-from ai_news_spider.config import Settings
-from tests.helpers import FIXTURE_URL_1, FIXTURE_URL_2, FIXTURE_URL_3
-
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai_news_spider.config import Settings  # noqa: E402
+from tests.helpers import FIXTURE_URL_1, FIXTURE_URL_2, FIXTURE_URL_3  # noqa: E402
 
 
 @pytest.fixture
@@ -79,5 +82,6 @@ def settings(tmp_path: Path) -> Settings:
         log_level="INFO",
         base_url="https://yunwu.ai/v1",
         api_key="test-key",
+        api_token="test-token",
         model_name="gpt-5-mini",
     )

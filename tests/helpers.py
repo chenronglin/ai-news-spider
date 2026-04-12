@@ -3,12 +3,22 @@ FIXTURE_URL_2 = "https://example.com/list/1.htm"
 FIXTURE_URL_3 = "https://example.com/list/2.htm"
 
 
-def wait_for_task_completion(client, task_id: int, *, timeout_seconds: float = 5.0):
+def build_auth_headers(token: str) -> dict[str, str]:
+    return {"X-API-Token": token}
+
+
+def wait_for_task_completion(
+    client,
+    task_id: int,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float = 5.0,
+):
     import time
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        response = client.get(f"/api/v1/tasks/{task_id}")
+        response = client.get(f"/api/v1/tasks/{task_id}", headers=headers)
         response.raise_for_status()
         payload = response.json()
         if payload["status"] in {"succeeded", "failed", "cancelled"}:
