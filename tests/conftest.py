@@ -8,6 +8,8 @@ import pytest
 from ai_news_spider.config import Settings
 from tests.helpers import FIXTURE_URL_1, FIXTURE_URL_2, FIXTURE_URL_3
 
+ROOT = Path(__file__).resolve().parent.parent
+
 
 @pytest.fixture
 def fixture_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
@@ -63,7 +65,7 @@ def settings(tmp_path: Path) -> Settings:
     data_dir = tmp_path / "data"
     runtime_dir = data_dir / "runtime"
     return Settings(
-        base_dir=Path(__file__).resolve().parent.parent,
+        base_dir=ROOT,
         data_dir=data_dir,
         runtime_dir=runtime_dir,
         db_path=data_dir / "app.db",

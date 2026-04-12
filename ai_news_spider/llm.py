@@ -136,7 +136,11 @@ class OpenAISiteSpecGenerator:
             best_heuristic.score,
         )
         for candidate in heuristic_candidates[:5]:
-            logger.info("Heuristic candidate summary url=%s summary=%s", sample.seed_url, candidate.prompt_summary())
+            logger.info(
+                "Heuristic candidate summary url=%s summary=%s",
+                sample.seed_url,
+                candidate.prompt_summary(),
+            )
 
         if not self.settings.base_url or not self.settings.api_key:
             if best_heuristic.validation_errors:
@@ -144,7 +148,9 @@ class OpenAISiteSpecGenerator:
                     "缺少 BASE_URL 或 API_KEY，且启发式候选规则不可用："
                     + "; ".join(best_heuristic.validation_errors)
                 )
-            raise SpecGenerationError("缺少 BASE_URL 或 API_KEY，无法调用站点规则生成模型。")
+            raise SpecGenerationError(
+                "缺少 BASE_URL 或 API_KEY，无法调用站点规则生成模型。"
+            )
 
         logger.info(
             "Generating site_spec via LLM url=%s model=%s",
@@ -171,7 +177,9 @@ class OpenAISiteSpecGenerator:
                 messages=messages,
             )
             content = response.choices[0].message.content or ""
-            logger.info("LLM raw response attempt=%s content=%s", attempt, content[:2000])
+            logger.info(
+                "LLM raw response attempt=%s content=%s", attempt, content[:2000]
+            )
             try:
                 data = json.loads(strip_markdown_fences(content))
                 spec = SiteSpec.model_validate(data)
@@ -385,8 +393,7 @@ class HeuristicSiteSpecGenerator:
             raise SpecGenerationError("启发式规则推断失败：未找到可重复列表项容器")
         if best.validation_errors:
             raise SpecGenerationError(
-                "启发式规则推断失败："
-                + "; ".join(best.validation_errors)
+                "启发式规则推断失败：" + "; ".join(best.validation_errors)
             )
         logger.info(
             "Heuristic selected site_spec url=%s score=%.2f selectors=%s",
@@ -466,7 +473,9 @@ def build_heuristic_spec_candidates(
                             "date_selector": date_selector,
                             "date_format": infer_date_format(group.nodes),
                             "timezone": "Asia/Shanghai",
-                            "pagination_mode": "next_link" if next_page_selector else "none",
+                            "pagination_mode": "next_link"
+                            if next_page_selector
+                            else "none",
                             "next_page_selector": next_page_selector,
                             "max_pages_default": 10,
                             "url_join_mode": "auto",
@@ -600,7 +609,9 @@ def parse_relative_xpath_step(
             predicate,
         )
         if contains_match is not None:
-            attrs[f"contains:{contains_match.group(1).lower()}"] = contains_match.group(2)
+            attrs[f"contains:{contains_match.group(1).lower()}"] = contains_match.group(
+                2
+            )
             continue
         return None
     return tag_name, attrs, index
@@ -644,14 +655,27 @@ def discover_item_groups(
     groups: list[ItemGroupCandidate] = []
     seen: set[str] = set()
     containers: list[Tag] = []
-    if isinstance(soup, Tag) and soup.name in {"ul", "ol", "div", "section", "article", "main", "table", "tbody"}:
+    if isinstance(soup, Tag) and soup.name in {
+        "ul",
+        "ol",
+        "div",
+        "section",
+        "article",
+        "main",
+        "table",
+        "tbody",
+    }:
         containers.append(soup)
     containers.extend(
-        soup.find_all(["ul", "ol", "div", "section", "article", "main", "table", "tbody"])
+        soup.find_all(
+            ["ul", "ol", "div", "section", "article", "main", "table", "tbody"]
+        )
     )
     for container in containers:
         direct_children = [
-            child for child in container.find_all(recursive=False) if isinstance(child, Tag)
+            child
+            for child in container.find_all(recursive=False)
+            if isinstance(child, Tag)
         ]
         if len(direct_children) < 3:
             continue
@@ -703,9 +727,15 @@ def score_item_group(nodes: list[Tag], *, selector: str) -> float:
     sample_nodes = nodes[:12]
     count = len(sample_nodes) or 1
     link_hits = sum(1 for node in sample_nodes if find_primary_link(node))
-    date_hits = sum(1 for node in sample_nodes if DATE_RE.search(node.get_text(" ", strip=True)))
-    newsish_hrefs = sum(1 for node in sample_nodes if link_looks_like_article(find_primary_link(node)))
-    text_lengths = [len(normalize_text(node.get_text(" ", strip=True))) for node in sample_nodes]
+    date_hits = sum(
+        1 for node in sample_nodes if DATE_RE.search(node.get_text(" ", strip=True))
+    )
+    newsish_hrefs = sum(
+        1 for node in sample_nodes if link_looks_like_article(find_primary_link(node))
+    )
+    text_lengths = [
+        len(normalize_text(node.get_text(" ", strip=True))) for node in sample_nodes
+    ]
     avg_text_len = sum(text_lengths) / len(text_lengths) if text_lengths else 0
     score = 0.0
     score += min(len(nodes), 30)
@@ -747,7 +777,9 @@ def infer_title_selectors(items: list[Tag], link_selectors: list[str]) -> list[s
     counter: Counter[str] = Counter()
     preferred_link = link_selectors[0] if link_selectors else None
     for item in items[:8]:
-        for selector, weight in candidate_title_selectors_for_item(item, preferred_link):
+        for selector, weight in candidate_title_selectors_for_item(
+            item, preferred_link
+        ):
             counter[selector] += weight
     ranked = sort_ranked_selectors(counter)
     if preferred_link and preferred_link not in ranked:
@@ -817,7 +849,9 @@ def infer_date_selectors(items: list[Tag]) -> list[str | None]:
             text = normalize_text(node.get_text(" ", strip=True))
             if not text:
                 continue
-            attrs = " ".join([node.get("id", ""), " ".join(node.get("class", []))]).lower()
+            attrs = " ".join(
+                [node.get("id", ""), " ".join(node.get("class", []))]
+            ).lower()
             score = 0
             if DATE_RE.fullmatch(text):
                 score += 18
@@ -940,9 +974,7 @@ def evaluate_spec_candidate(
         if len(samples) < 3:
             samples.append({"title": title, "href": href, "raw_date": raw_date})
 
-    avg_title_len = (
-        sum(len(title) for title in titles) / len(titles) if titles else 0.0
-    )
+    avg_title_len = sum(len(title) for title in titles) / len(titles) if titles else 0.0
     unique_title_ratio = len(set(titles)) / len(titles) if titles else 0.0
     score = base_group_score
     score += title_count * 10
@@ -1001,7 +1033,15 @@ def link_looks_like_article(link_el: Tag | None) -> bool:
         return False
     return any(
         token in href
-        for token in (".htm", ".html", "/info/", "/article/", "/content/", "/tzgg", "/gg")
+        for token in (
+            ".htm",
+            ".html",
+            "/info/",
+            "/article/",
+            "/content/",
+            "/tzgg",
+            "/gg",
+        )
     ) or bool(re.search(r"\d", href))
 
 
@@ -1022,7 +1062,7 @@ def sort_ranked_selectors(counter: Counter[Any]) -> list[Any]:
 
 
 def dedupe_weighted_selectors(
-    selectors: list[tuple[str | None, int]]
+    selectors: list[tuple[str | None, int]],
 ) -> list[tuple[str | None, int]]:
     best_weights: dict[str | None, int] = {}
     for selector, weight in selectors:
@@ -1115,7 +1155,9 @@ def absolute_css_path(node: Tag) -> str:
         part = css_path(current)
         parent = current.parent if isinstance(current.parent, Tag) else None
         if parent is not None:
-            siblings = [child for child in parent.find_all(current.name, recursive=False)]
+            siblings = [
+                child for child in parent.find_all(current.name, recursive=False)
+            ]
             if len(siblings) > 1 and not current.get("id") and not current.get("class"):
                 index = siblings.index(current) + 1
                 part = f"{part}:nth-of-type({index})"

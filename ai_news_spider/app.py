@@ -1,19 +1,53 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
+from ai_news_spider.api.routes import create_api_router
 from ai_news_spider.config import Settings
 from ai_news_spider.crawler import CrawlClient
 from ai_news_spider.db import Database
 from ai_news_spider.llm import OpenAISiteSpecGenerator, SiteSpecGenerator
 from ai_news_spider.runner import CandidateRunner
 from ai_news_spider.scheduler import CrawlScheduler
-from ai_news_spider.services import SpiderService
+from ai_news_spider.services import ServiceContainer, build_services
+
+OPENAPI_TAGS = [
+    {
+        "name": "系统",
+        "description": "服务健康检查、系统配置摘要等全局信息接口。",
+    },
+    {
+        "name": "调度",
+        "description": "查看调度器状态，或手动触发全站批量正式运行。",
+    },
+    {
+        "name": "调试工具",
+        "description": "调试页面抓取和选择器定位时使用的辅助接口。",
+    },
+    {
+        "name": "站点",
+        "description": "站点的创建、更新、详情查看，以及站点下版本、运行记录、文章列表等接口。",
+    },
+    {
+        "name": "版本",
+        "description": "规则版本详情、重新生成和审批相关接口。",
+    },
+    {
+        "name": "结果表",
+        "description": "对 `article_item` 结果表进行单站或跨站查询、过滤和分页的接口。",
+    },
+    {
+        "name": "运行记录",
+        "description": "预览运行和正式运行的列表与详情接口。",
+    },
+    {
+        "name": "异步任务",
+        "description": "异步任务的创建结果查询、列表查看和取消操作。",
+    },
+]
 
 
 def build_app(
@@ -29,15 +63,25 @@ def build_app(
     crawler = CrawlClient()
     spec_generator = spec_generator or OpenAISiteSpecGenerator(settings)
     runner = CandidateRunner(settings)
-    service = SpiderService(settings, db, crawler, spec_generator, runner)
-    templates = Jinja2Templates(
-        directory=str(settings.base_dir / "ai_news_spider" / "templates")
-    )
 
     scheduler = None
     if with_scheduler:
-        scheduler = CrawlScheduler(settings, db, service.run_all_sites)
-        service.scheduler = scheduler
+        scheduler = CrawlScheduler(
+            settings,
+            db,
+            run_prod_batch=None,
+        )
+
+    services: ServiceContainer = build_services(
+        settings=settings,
+        db=db,
+        crawler=crawler,
+        spec_generator=spec_generator,
+        runner=runner,
+        scheduler=scheduler,
+    )
+    if scheduler is not None:
+        scheduler.run_prod_batch = services.task_service.enqueue_run_all_sites_prod
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -45,119 +89,47 @@ def build_app(
         if scheduler:
             scheduler.start()
             await scheduler.refresh_jobs()
+        await services.task_executor.start()
         try:
             yield
         finally:
+            await services.task_executor.stop()
             if scheduler:
                 scheduler.shutdown()
 
-    app = FastAPI(title="AI News Spider", lifespan=lifespan)
+    app = FastAPI(
+        title="AI News Spider API",
+        summary="新闻列表采集与规则生成后端接口",
+        description=(
+            "这是一个面向前后端分离架构的新闻列表采集后端服务。"
+            "系统支持站点创建、规则生成、预览运行、版本审批、正式运行、批量调度和异步任务轮询。"
+            "\n\n"
+            "推荐测试流程："
+            "\n"
+            "1. 调用 `POST /api/v1/sites` 创建站点并生成预览任务。"
+            "\n"
+            "2. 轮询 `GET /api/v1/tasks/{task_id}` 获取 `site_id`、`version_id`、`run_id`。"
+            "\n"
+            "3. 使用 `GET /api/v1/runs/{run_id}` 查看预览结果。"
+            "\n"
+            "4. 如果规则合适，调用 `POST /api/v1/versions/{version_id}/approve` 审批为正式版本。"
+            "\n"
+            "5. 使用 `POST /api/v1/sites/{site_id}/runs` 或 `POST /api/v1/scheduler/run-now` 触发正式运行。"
+            "\n\n"
+            "耗时写操作统一采用异步任务机制，接口会返回 `202 Accepted` 和任务 ID。"
+        ),
+        version="1.0.0",
+        openapi_tags=OPENAPI_TAGS,
+        lifespan=lifespan,
+    )
     app.state.settings = settings
-    app.state.service = service
-    app.state.templates = templates
+    app.state.db = db
+    app.state.crawler = crawler
+    app.state.services = services
+    app.include_router(create_api_router())
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "index.html",
-            {
-                "llm_ready": bool(settings.base_url and settings.api_key),
-                "model_name": settings.model_name,
-                "scheduler_description": settings.scheduler_description(),
-            },
-        )
-
-    @app.get("/tools/url-selector", response_class=HTMLResponse)
-    async def url_selector(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "url_selector.html",
-            {
-                "proxy_endpoint": str(request.url_for("proxy_html")),
-            },
-        )
-
-    @app.get("/api/proxy/html", response_class=JSONResponse)
-    async def proxy_html(url: str, wait_for: str | None = None) -> JSONResponse:
-        parsed = urlparse(url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return JSONResponse(
-                {"error": "url must be an absolute http/https URL"},
-                status_code=400,
-            )
-        try:
-            html, _, _, final_url = await crawler.fetch_html(
-                url,
-                requires_js=True,
-                wait_for=wait_for,
-            )
-            return JSONResponse(
-                {
-                    "url": url,
-                    "final_url": final_url,
-                    "html": html,
-                    "rendered_by": "crawl4ai",
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse(
-                {"error": f"proxy fetch failed: {exc}"},
-                status_code=502,
-            )
-
-    @app.post("/sites")
-    async def create_site(request: Request) -> Response:
-        form = await request.form()
-        seed_url = str(form.get("seed_url", "")).strip()
-        list_locator_hint = str(form.get("list_locator_hint", "")).strip() or None
-        try:
-            run_id = await service.create_site_and_preview(
-                seed_url,
-                list_locator_hint=list_locator_hint,
-            )
-            return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
-        except Exception as exc:  # noqa: BLE001
-            return templates.TemplateResponse(
-                request,
-                "index.html",
-                {
-                    "error": str(exc),
-                    "llm_ready": bool(settings.base_url and settings.api_key),
-                    "model_name": settings.model_name,
-                    "scheduler_description": settings.scheduler_description(),
-                },
-                status_code=400,
-            )
-
-    @app.get("/runs/{run_id}", response_class=HTMLResponse)
-    async def run_detail(request: Request, run_id: int) -> HTMLResponse:
-        detail = await service.get_run_detail(run_id)
-        return templates.TemplateResponse(request, "run.html", {"run": detail})
-
-    @app.post("/versions/{version_id}/approve")
-    async def approve_version(version_id: int) -> RedirectResponse:
-        await service.approve_version(version_id)
-        return RedirectResponse(url="/sites", status_code=303)
-
-    @app.post("/versions/{version_id}/regenerate")
-    async def regenerate_version(request: Request, version_id: int) -> RedirectResponse:
-        form = await request.form()
-        list_locator_hint = str(form.get("list_locator_hint", "")).strip()
-        run_id = await service.regenerate_version(version_id, list_locator_hint)
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
-
-    @app.get("/sites", response_class=HTMLResponse)
-    async def sites(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "sites.html",
-            {"sites": await service.list_sites()},
-        )
-
-    @app.post("/sites/{site_id}/run")
-    async def run_site(site_id: int) -> RedirectResponse:
-        run_id = await service.run_site(site_id, run_type="prod")
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+    @app.exception_handler(RuntimeError)
+    async def runtime_error_handler(_, exc: RuntimeError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     return app

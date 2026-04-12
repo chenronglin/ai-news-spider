@@ -35,6 +35,9 @@ class SiteSpec(BaseModel):
     next_page_selector: str | None = None
     max_pages_default: int = 3
     url_join_mode: UrlJoinMode = "auto"
+    detail_enabled: bool = True
+    detail_requires_js: bool | None = None
+    detail_wait_for: str | None = None
 
     @field_validator("seed_url")
     @classmethod
@@ -68,6 +71,13 @@ class SiteSpec(BaseModel):
             raise ValueError("max_pages_default must be >= 1")
         return value
 
+    def model_post_init(self, __context: Any) -> None:
+        del __context
+        if self.detail_requires_js is None:
+            self.detail_requires_js = self.requires_js
+        if self.detail_wait_for is None:
+            self.detail_wait_for = self.wait_for
+
     def summary(self) -> dict[str, Any]:
         return {
             "site_name": self.site_name,
@@ -79,6 +89,9 @@ class SiteSpec(BaseModel):
             "pagination_mode": self.pagination_mode,
             "next_page_selector": self.next_page_selector,
             "max_pages_default": self.max_pages_default,
+            "detail_enabled": self.detail_enabled,
+            "detail_requires_js": self.detail_requires_js,
+            "detail_wait_for": self.detail_wait_for,
         }
 
     def validate_on_html(self, html: str, page_url: str | None = None) -> list[str]:
@@ -89,7 +102,8 @@ class SiteSpec(BaseModel):
             items = soup.select(self.list_item_selector)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Invalid CSS selector for list_item_selector=%s", self.list_item_selector
+                "Invalid CSS selector for list_item_selector=%s",
+                self.list_item_selector,
             )
             return [
                 f"list_item_selector '{self.list_item_selector}' is not a valid CSS selector: {exc}"
@@ -104,12 +118,16 @@ class SiteSpec(BaseModel):
             title_el = select_first(first, self.title_selector)
         except Exception as exc:  # noqa: BLE001
             title_el = None
-            errors.append(f"title_selector '{self.title_selector}' is not valid CSS: {exc}")
+            errors.append(
+                f"title_selector '{self.title_selector}' is not valid CSS: {exc}"
+            )
         try:
             link_el = select_first(first, self.link_selector)
         except Exception as exc:  # noqa: BLE001
             link_el = None
-            errors.append(f"link_selector '{self.link_selector}' is not valid CSS: {exc}")
+            errors.append(
+                f"link_selector '{self.link_selector}' is not valid CSS: {exc}"
+            )
         date_el = None
         if self.date_selector:
             try:
@@ -126,7 +144,9 @@ class SiteSpec(BaseModel):
         if link_el is None or not link_el.get("href"):
             errors.append(f"link_selector '{self.link_selector}' did not produce href")
         if self.date_selector and date_el is None:
-            errors.append(f"date_selector '{self.date_selector}' did not produce a node")
+            errors.append(
+                f"date_selector '{self.date_selector}' did not produce a node"
+            )
 
         if self.pagination_mode == "next_link":
             if not self.next_page_selector:

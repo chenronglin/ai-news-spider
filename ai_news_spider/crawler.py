@@ -37,8 +37,30 @@ def _load_fixture_map() -> dict[str, str]:
     return json.loads(raw)
 
 
-def fixture_html_for_url(url: str) -> str | None:
+def fixture_payload_for_url(url: str) -> Any | None:
     return _load_fixture_map().get(url)
+
+
+def fixture_html_for_url(url: str) -> str | None:
+    payload = fixture_payload_for_url(url)
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        return str(payload.get("html", ""))
+    return str(payload)
+
+
+def fixture_markdown_for_url(url: str) -> str | None:
+    payload = fixture_payload_for_url(url)
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        markdown = payload.get("markdown")
+        if markdown is not None:
+            return str(markdown)
+        html = payload.get("html")
+        return str(html) if html is not None else None
+    return str(payload)
 
 
 def extract_likely_list_html(html: str) -> str:
@@ -61,7 +83,9 @@ def extract_likely_list_html(html: str) -> str:
     return best_fragment or html[:5000]
 
 
-def extract_links_from_html(base_url: str, html: str) -> dict[str, list[dict[str, str]]]:
+def extract_links_from_html(
+    base_url: str, html: str
+) -> dict[str, list[dict[str, str]]]:
     soup = BeautifulSoup(html, "html.parser")
     internal: list[dict[str, str]] = []
     external: list[dict[str, str]] = []
@@ -109,10 +133,16 @@ class CrawlClient:
         requires_js: bool = False,
         wait_for: str | None = None,
     ) -> tuple[str, str, dict[str, list[Any]], str]:
-        fixture = fixture_html_for_url(url)
-        if fixture is not None:
+        fixture_html = fixture_html_for_url(url)
+        if fixture_html is not None:
             logger.info("Using fixture HTML for url=%s", url)
-            return fixture, fixture, extract_links_from_html(url, fixture), url
+            fixture_markdown = fixture_markdown_for_url(url) or fixture_html
+            return (
+                fixture_html,
+                fixture_markdown,
+                extract_links_from_html(url, fixture_html),
+                url,
+            )
 
         if not requires_js:
             try:
@@ -158,6 +188,20 @@ class CrawlClient:
             result.links or {},
             result.url or url,
         )
+
+    async def fetch_detail_content(
+        self,
+        url: str,
+        *,
+        requires_js: bool = False,
+        wait_for: str | None = None,
+    ) -> tuple[str, str, str]:
+        html, markdown, _, final_url = await self.fetch_html(
+            url,
+            requires_js=requires_js,
+            wait_for=wait_for,
+        )
+        return html, markdown, final_url
 
     async def fetch_sample(
         self,

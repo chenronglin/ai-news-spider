@@ -116,9 +116,7 @@ async def test_runtime_extracts_anchor_wrapped_items_for_bnu(
 ) -> None:
     html = Path("tests/fixtures/bnu_env_notice.html").read_text()
     map_path = tmp_path / "bnu_fixture_map.json"
-    map_path.write_text(
-        json.dumps({"https://env.bnu.edu.cn/tzgg4/index.htm": html})
-    )
+    map_path.write_text(json.dumps({"https://env.bnu.edu.cn/tzgg4/index.htm": html}))
     monkeypatch.setenv("AI_NEWS_SPIDER_FIXTURE_MAP", str(map_path))
 
     sample = CrawlSample(
@@ -144,6 +142,11 @@ async def test_runtime_extracts_anchor_wrapped_items_for_bnu(
         },
     )
     assert result["stats"]["items_found"] >= 10
-    assert result["items"][0]["title"] == "招聘-诚邀海内外优秀学者加入北京师范大学环境学院"
+    assert (
+        result["items"][0]["title"] == "招聘-诚邀海内外优秀学者加入北京师范大学环境学院"
+    )
     assert result["items"][0]["published_at"] == "2025-07-31T00:00:00+08:00"
-    assert result["debug"]["next_page_trace"][0]["next_page_url"] == "https://env.bnu.edu.cn/tzgg4/index1.htm"
+    assert (
+        result["debug"]["next_page_trace"][0]["next_page_url"]
+        == "https://env.bnu.edu.cn/tzgg4/index1.htm"
+    )
