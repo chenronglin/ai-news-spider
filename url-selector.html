@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>URL 页面选择器 Demo</title>
+  <title>URL 页面选择器</title>
   <style>
     :root {
       --bg: #0f172a;
@@ -50,7 +50,7 @@
     .toolbar {
       padding: 12px;
       display: grid;
-      grid-template-columns: 1fr auto auto auto;
+      grid-template-columns: minmax(0, 1fr) minmax(200px, 260px) auto auto;
       gap: 10px;
       align-items: center;
     }
@@ -258,15 +258,15 @@
   <div class="app">
     <div class="toolbar">
       <input id="urlInput" class="url-input" type="url" placeholder="输入新闻列表页 URL，例如 https://example.com/news" />
+      <input id="apiTokenInput" class="url-input" type="password" placeholder="输入 X-API-Token" autocomplete="off" />
       <button id="visitBtn" class="btn-primary">访问</button>
       <button id="selectorBtn" class="btn-ghost active">选择模式：开启</button>
-      <button id="loadDemoBtn" class="btn-ghost">加载内置示例</button>
     </div>
 
     <div class="hint">
       <div class="status" id="statusWrap">
         <span id="statusDot" class="dot"></span>
-        <span id="statusText">等待输入 URL。说明：这版是纯前端 Demo，只能处理“允许浏览器跨域抓取 HTML”的页面。</span>
+        <span id="statusText">等待输入 URL 和 API Token。说明：当前版本通过服务端代理接口抓取 HTML，再由前端查看器做点选。</span>
       </div>
       <div>悬浮高亮，点击元素后输出 CSS Selector / XPath</div>
     </div>
@@ -285,7 +285,7 @@
       <aside class="bottom-panel">
         <div>
           <h2 class="panel-title">选择结果</h2>
-          <p class="panel-subtitle">这版实现了最核心的点选能力：鼠标悬浮高亮、点击选中、输出 CSS / XPath。更复杂的“训练式 selector 推荐”要再加算法。</p>
+          <p class="panel-subtitle">服务端代理接口先抓取页面 HTML，前端只负责加载、悬浮高亮、点击选中并输出 CSS / XPath。</p>
         </div>
 
         <div class="field">
@@ -309,19 +309,20 @@
         </div>
 
         <div class="footer-note">
-          <strong>实话实说：</strong> 对任意第三方网站，普通网页做不到像浏览器扩展那样稳定地读取 DOM。<br />
-          这版适合：同源页面、允许 CORS 抓取的页面，或你自己控制的网站。<br />
-          真要覆盖任意站点，建议下一步改成：<strong>浏览器扩展</strong> 或 <strong>服务端代理 + 前端查看器</strong>。
+          <strong>当前模式：</strong> 访问按钮会调用 <code>/api/v1/tools/proxy/html</code> 抓取页面 HTML。<br />
+          请求头里必须携带正确的 <code>X-API-Token</code>，否则接口会返回 401。<br />
+          页面里的相对链接会基于代理接口返回的最终 URL 重新解析，便于继续检查 DOM 结构。
         </div>
       </aside>
     </div>
   </div>
 
   <script>
+    const PROXY_ENDPOINT = 'http://127.0.0.1:8000/api/v1/tools/proxy/html';
     const urlInput = document.getElementById('urlInput');
+    const apiTokenInput = document.getElementById('apiTokenInput');
     const visitBtn = document.getElementById('visitBtn');
     const selectorBtn = document.getElementById('selectorBtn');
-    const loadDemoBtn = document.getElementById('loadDemoBtn');
     const previewFrame = document.getElementById('previewFrame');
     const frameUrlText = document.getElementById('frameUrlText');
     const statusDot = document.getElementById('statusDot');
@@ -339,81 +340,6 @@
       selectedElement: null,
     };
 
-    const DEMO_HTML = `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <title>内置新闻列表示例</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
-    .wrap { max-width: 860px; margin: 0 auto; padding: 28px 18px 50px; }
-    .hero { background: white; border-radius: 18px; padding: 24px; box-shadow: 0 10px 30px rgba(15, 23, 42, .08); margin-bottom: 20px; }
-    .hero h1 { margin: 0 0 8px; font-size: 30px; }
-    .hero p { margin: 0; color: #475569; }
-    .news-list { display: grid; gap: 14px; }
-    .news-card { background: white; border: 1px solid #e2e8f0; border-radius: 16px; padding: 18px; box-shadow: 0 4px 20px rgba(15,23,42,.04); }
-    .news-card a { text-decoration: none; color: #0f172a; }
-    .news-card h2 { margin: 0 0 8px; font-size: 22px; }
-    .meta { display: flex; gap: 14px; color: #64748b; font-size: 14px; margin-bottom: 10px; }
-    .tag { display: inline-block; background: #ecfeff; color: #0f766e; border-radius: 999px; padding: 6px 10px; font-size: 12px; margin-top: 6px; }
-    .pagination { display: flex; gap: 8px; justify-content: center; margin-top: 22px; }
-    .pagination a { background: white; color: #334155; padding: 10px 14px; border-radius: 12px; text-decoration: none; border: 1px solid #cbd5e1; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <h1>科技新闻列表</h1>
-      <p>这是一个内置示例页面，你可以直接测试“标题 / 链接 / 发布时间”的 selector 选取。</p>
-    </section>
-
-    <section class="news-list">
-      <article class="news-card item-card">
-        <a class="item-link" href="/articles/101">
-          <h2 class="item-title">国产 AI Agent 工具链进入规模化实战阶段</h2>
-        </a>
-        <div class="meta">
-          <time class="publish-time" datetime="2026-04-11">2026-04-11</time>
-          <span class="source">AI 开发周刊</span>
-        </div>
-        <p class="summary">多家团队开始将 agent workflow 用于真实生产，而不再只是 demo。</p>
-        <span class="tag">AI</span>
-      </article>
-
-      <article class="news-card item-card">
-        <a class="item-link" href="/articles/102">
-          <h2 class="item-title">浏览器端网页结构提取方案持续演进</h2>
-        </a>
-        <div class="meta">
-          <time class="publish-time" datetime="2026-04-10">2026-04-10</time>
-          <span class="source">前端观察</span>
-        </div>
-        <p class="summary">越来越多的工具开始尝试将 selector 识别、内容抽取与人工复核结合。</p>
-        <span class="tag">前端</span>
-      </article>
-
-      <article class="news-card item-card">
-        <a class="item-link" href="/articles/103">
-          <h2 class="item-title">低代码爬虫平台开始强调“人工审核 + 自动化”</h2>
-        </a>
-        <div class="meta">
-          <time class="publish-time" datetime="2026-04-09">2026-04-09</time>
-          <span class="source">数据工程内参</span>
-        </div>
-        <p class="summary">越来越多平台不再追求全自动，而是把“人确认 selector”放到关键闭环里。</p>
-        <span class="tag">爬虫</span>
-      </article>
-    </section>
-
-    <nav class="pagination">
-      <a href="?page=1">1</a>
-      <a href="?page=2">2</a>
-      <a href="?page=3">3</a>
-    </nav>
-  </div>
-</body>
-</html>`;
-
     function setStatus(type, text) {
       statusText.textContent = text;
       statusDot.className = 'dot';
@@ -425,6 +351,12 @@
       const value = input.trim();
       if (!value) throw new Error('请输入 URL');
       return new URL(value).toString();
+    }
+
+    function getApiToken() {
+      const value = apiTokenInput.value.trim();
+      if (!value) throw new Error('请输入 X-API-Token');
+      return value;
     }
 
     function injectBase(html, baseUrl) {
@@ -447,8 +379,7 @@
     }
 
     function buildSrcdoc(html, url) {
-      const safe = stripActiveContent(injectBase(html, url));
-      return safe;
+      return stripActiveContent(injectBase(html, url));
     }
 
     function copyText(text) {
@@ -460,14 +391,6 @@
       }).catch(() => {
         setStatus('fail', '复制失败，可能是浏览器权限限制。');
       });
-    }
-
-    function elementLabel(el) {
-      if (!el || el.nodeType !== 1) return '无';
-      const tag = el.tagName.toLowerCase();
-      const id = el.id ? `#${el.id}` : '';
-      const cls = el.classList?.length ? '.' + Array.from(el.classList).slice(0, 4).join('.') : '';
-      return `${tag}${id}${cls}`;
     }
 
     function getXPath(el) {
@@ -674,52 +597,6 @@
       }, 200);
     }
 
-    async function loadRemoteUrl(url) {
-      visitBtn.disabled = true;
-      setStatus('', '正在抓取页面 HTML...');
-      frameUrlText.textContent = url;
-      cssOutput.value = '';
-      xpathOutput.value = '';
-      metaOutput.textContent = '尚未选择元素';
-
-      try {
-        const response = await fetch(url, {
-          method: 'GET',
-          mode: 'cors',
-          credentials: 'omit',
-          redirect: 'follow'
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const contentType = response.headers.get('content-type') || '';
-        if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
-          throw new Error(`目标返回的不是 HTML，而是 ${contentType || '未知内容类型'}`);
-        }
-
-        const html = await response.text();
-        await loadWithSrcdoc(html, url, url);
-      } catch (error) {
-        console.error(error);
-        previewFrame.srcdoc = `<!doctype html><html><body style="font-family:system-ui;padding:32px;line-height:1.7;background:#fff7ed;color:#7c2d12;">
-          <h2>加载失败</h2>
-          <p><strong>原因：</strong>${escapeHtml(error.message || '未知错误')}</p>
-          <p>这通常不是你代码写错了，而是浏览器安全边界导致的：</p>
-          <ul>
-            <li>目标站点没有开放 CORS，浏览器不允许前端 <code>fetch()</code> 拿到 HTML</li>
-            <li>即便 iframe 能显示，跨域 iframe 也不能被当前页面读取 DOM</li>
-            <li>很多网站还会禁止被 iframe 嵌入</li>
-          </ul>
-          <p>建议下一步改为：服务端代理抓取 HTML，再由前端查看器做点选。</p>
-        </body></html>`;
-        setStatus('fail', '加载失败：目标站点大概率禁止纯前端跨域抓取或嵌入。');
-      } finally {
-        visitBtn.disabled = false;
-      }
-    }
-
     function escapeHtml(value) {
       return String(value)
         .replace(/&/g, '&amp;')
@@ -727,6 +604,64 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    async function readJsonSafely(response) {
+      const text = await response.text();
+      if (!text) return null;
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { detail: text };
+      }
+    }
+
+    async function loadRemoteUrl(url) {
+      visitBtn.disabled = true;
+      setStatus('', '正在通过代理接口抓取页面 HTML...');
+      frameUrlText.textContent = url;
+      cssOutput.value = '';
+      xpathOutput.value = '';
+      metaOutput.textContent = '尚未选择元素';
+
+      try {
+        const token = getApiToken();
+        const response = await fetch(`${PROXY_ENDPOINT}?url=${encodeURIComponent(url)}`, {
+          method: 'GET',
+          headers: {
+            accept: 'application/json',
+            'X-API-Token': token,
+          },
+        });
+        const payload = await readJsonSafely(response);
+
+        if (!response.ok) {
+          throw new Error(payload?.detail || `HTTP ${response.status}`);
+        }
+        if (!payload || typeof payload.html !== 'string') {
+          throw new Error('代理接口返回数据缺少 html 字段');
+        }
+
+        const resolvedUrl = payload.final_url || payload.url || url;
+        await loadWithSrcdoc(payload.html, resolvedUrl, resolvedUrl);
+      } catch (error) {
+        console.error(error);
+        previewFrame.srcdoc = `<!doctype html><html><body style="font-family:system-ui;padding:32px;line-height:1.7;background:#fff7ed;color:#7c2d12;">
+          <h2>加载失败</h2>
+          <p><strong>原因：</strong>${escapeHtml(error.message || '未知错误')}</p>
+          <p>请优先检查以下几项：</p>
+          <ul>
+            <li><code>X-API-Token</code> 是否正确</li>
+            <li>后端服务是否已启动，并且可访问 <code>${escapeHtml(PROXY_ENDPOINT)}</code></li>
+            <li>目标 URL 是否能被服务端代理抓取</li>
+          </ul>
+          <p>如果接口返回 502，通常说明服务端代理在抓取目标页面时失败了。</p>
+        </body></html>`;
+        setStatus('fail', '加载失败：代理接口未返回可用 HTML。');
+      } finally {
+        visitBtn.disabled = false;
+      }
     }
 
     function updateSelectorModeButton() {
@@ -748,15 +683,13 @@
       if (event.key === 'Enter') visitBtn.click();
     });
 
+    apiTokenInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') visitBtn.click();
+    });
+
     selectorBtn.addEventListener('click', () => {
       selectorMode = !selectorMode;
       updateSelectorModeButton();
-    });
-
-    loadDemoBtn.addEventListener('click', async () => {
-      urlInput.value = 'https://demo.local/news';
-      setStatus('', '正在加载内置示例页面...');
-      await loadWithSrcdoc(DEMO_HTML, 'https://demo.local/news', '内置新闻列表示例');
     });
 
     copyCssBtn.addEventListener('click', () => copyText(cssOutput.value));
@@ -765,9 +698,6 @@
     previewFrame.addEventListener('load', () => {
       try { attachInspector(); } catch (e) { console.error(e); }
     });
-
-    // 默认先加载内置示例，方便直接试用。
-    loadWithSrcdoc(DEMO_HTML, 'https://demo.local/news', '内置新闻列表示例');
   </script>
 </body>
 </html>
