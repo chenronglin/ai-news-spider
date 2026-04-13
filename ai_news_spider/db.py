@@ -315,6 +315,23 @@ class Database:
             await db.commit()
         return await self.get_site(site_id)
 
+    async def delete_site(self, site_id: int) -> bool:
+        existing = await self.get_site(site_id)
+        if not existing:
+            return False
+
+        async with self.session() as db:
+            await db.execute("DELETE FROM async_task WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM regen_feedback WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM article_detail WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM article_item WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM crawl_run WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM crawler_version WHERE site_id = ?", (site_id,))
+            await db.execute("DELETE FROM crawl_site WHERE id = ?", (site_id,))
+            await db.commit()
+
+        return True
+
     async def update_site_notes(self, site_id: int, notes: str | None) -> None:
         async with self.session() as db:
             await db.execute(

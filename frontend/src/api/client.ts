@@ -1,5 +1,11 @@
 import type {
+  ArticleListResponse,
   CreateSiteRequest,
+  ListArticlesParams,
+  SiteDetail,
+  SiteSummary,
+  SiteListResponse,
+  SiteUpdateRequest,
   ProxyHtmlResponse,
   RegenerateVersionRequest,
   RunDetail,
@@ -22,7 +28,20 @@ export class ApiError extends Error {
 
 export interface ApiClient {
   proxyHtml(url: string, token: string): Promise<ProxyHtmlResponse>;
+  listArticles(params: ListArticlesParams, token: string): Promise<ArticleListResponse>;
+  listSites(
+    params: {
+      status?: string;
+      keyword?: string;
+      page?: number;
+      pageSize?: number;
+    },
+    token: string,
+  ): Promise<SiteListResponse>;
   createSite(body: CreateSiteRequest, token: string): Promise<TaskAcceptedResponse>;
+  getSite(siteId: number, token: string): Promise<SiteDetail>;
+  updateSite(siteId: number, body: SiteUpdateRequest, token: string): Promise<SiteSummary>;
+  deleteSite(siteId: number, token: string): Promise<void>;
   getTask(taskId: number, token: string): Promise<TaskSummary>;
   getRun(runId: number, token: string): Promise<RunDetail>;
   regenerateVersion(
@@ -33,7 +52,7 @@ export interface ApiClient {
   approveVersion(versionId: number, token: string): Promise<VersionApprovalResponse>;
 }
 
-type HttpMethod = 'GET' | 'POST';
+type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
 interface RequestOptions {
   method?: HttpMethod;
@@ -122,11 +141,84 @@ export function createApiClient(
         query: { url },
       });
     },
+    listArticles(params, token) {
+      const query: Record<string, string> = {};
+      if (params.siteId !== undefined) {
+        query.site_id = String(params.siteId);
+      }
+      if (params.runId !== undefined) {
+        query.run_id = String(params.runId);
+      }
+      if (params.title) {
+        query.title = params.title;
+      }
+      if (params.keyword) {
+        query.keyword = params.keyword;
+      }
+      if (params.sourceListUrl) {
+        query.source_list_url = params.sourceListUrl;
+      }
+      if (params.publishedFrom) {
+        query.published_from = params.publishedFrom;
+      }
+      if (params.publishedTo) {
+        query.published_to = params.publishedTo;
+      }
+      if (params.page) {
+        query.page = String(params.page);
+      }
+      if (params.pageSize) {
+        query.page_size = String(params.pageSize);
+      }
+
+      return request<ArticleListResponse>('/api/v1/articles', {
+        token,
+        query,
+      });
+    },
+    listSites(params, token) {
+      const query: Record<string, string> = {};
+      if (params.status) {
+        query.status = params.status;
+      }
+      if (params.keyword) {
+        query.keyword = params.keyword;
+      }
+      if (params.page) {
+        query.page = String(params.page);
+      }
+      if (params.pageSize) {
+        query.page_size = String(params.pageSize);
+      }
+
+      return request<SiteListResponse>('/api/v1/sites', {
+        token,
+        query,
+      });
+    },
     createSite(body, token) {
       return request<TaskAcceptedResponse>('/api/v1/sites', {
         method: 'POST',
         token,
         body,
+      });
+    },
+    getSite(siteId, token) {
+      return request<SiteDetail>(`/api/v1/sites/${siteId}`, {
+        token,
+      });
+    },
+    updateSite(siteId, body, token) {
+      return request<SiteSummary>(`/api/v1/sites/${siteId}`, {
+        method: 'PATCH',
+        token,
+        body,
+      });
+    },
+    async deleteSite(siteId, token) {
+      await request<null>(`/api/v1/sites/${siteId}`, {
+        method: 'DELETE',
+        token,
       });
     },
     getTask(taskId, token) {

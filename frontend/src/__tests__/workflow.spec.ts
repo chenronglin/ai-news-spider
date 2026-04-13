@@ -5,7 +5,12 @@ import { __resetWorkflowDeps, __setWorkflowDeps, useWorkflowStore } from '@/stor
 function createApiMock(): ApiClient {
   return {
     proxyHtml: vi.fn(),
+    listArticles: vi.fn(),
+    listSites: vi.fn(),
     createSite: vi.fn(),
+    getSite: vi.fn(),
+    updateSite: vi.fn(),
+    deleteSite: vi.fn(),
     getTask: vi.fn(),
     getRun: vi.fn(),
     regenerateVersion: vi.fn(),

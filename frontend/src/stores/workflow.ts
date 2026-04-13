@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { createApiClient, type ApiClient } from '@/api/client';
 import type { ExtractedItem, RunDetail, TaskSummary } from '@/api/types';
+import { readApiTokenFromStorage, writeApiTokenToStorage } from '@/utils/token';
 
 export type WorkflowStatus =
   | 'idle'
@@ -11,7 +12,6 @@ export type WorkflowStatus =
   | 'previewFailed'
   | 'approved';
 
-const TOKEN_STORAGE_KEY = 'ai-news-spider.api-token';
 const TASK_POLL_INTERVAL_MS = 1500;
 const TASK_TIMEOUT_MS = 120000;
 
@@ -42,25 +42,6 @@ export function __setWorkflowDeps(nextDeps: Partial<WorkflowDeps>): void {
 
 export function __resetWorkflowDeps(): void {
   deps = defaultDeps;
-}
-
-function readTokenFromStorage(): string {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-  return window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? '';
-}
-
-function writeTokenToStorage(token: string): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  if (token.trim()) {
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, token.trim());
-  } else {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-  }
 }
 
 function normalizeError(error: unknown): string {
@@ -137,14 +118,14 @@ export const useWorkflowStore = defineStore('workflow', {
       };
       return labels[state.workflowStatus];
     },
-  },
+    },
   actions: {
     hydrateToken(): void {
-      this.apiToken = readTokenFromStorage();
+      this.apiToken = readApiTokenFromStorage();
     },
     setApiToken(value: string): void {
       this.apiToken = value;
-      writeTokenToStorage(value);
+      writeApiTokenToStorage(value);
     },
     setSelectorMode(enabled: boolean): void {
       this.selectorMode = enabled;

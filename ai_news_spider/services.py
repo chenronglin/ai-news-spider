@@ -572,6 +572,9 @@ class SiteService:
         )
         return updated
 
+    async def delete_site(self, site_id: int) -> bool:
+        return await self.db.delete_site(site_id)
+
     def _serialize_site_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": row["id"],

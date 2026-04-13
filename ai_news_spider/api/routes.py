@@ -4,6 +4,7 @@ from secrets import compare_digest
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.responses import Response
 
 from ai_news_spider.api.schemas import (
     ApiError,
@@ -275,6 +276,23 @@ def create_api_router() -> APIRouter:
         if summary is None:
             raise HTTPException(status_code=404, detail="site not found")
         return SiteSummary.model_validate(summary)
+
+    @router.delete(
+        "/sites/{site_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["站点"],
+        summary="删除站点",
+        description="删除指定站点及其关联的版本、运行、文章、反馈和任务记录。",
+        responses={404: {"model": ApiError}},
+    )
+    async def delete_site(
+        site_id: int,
+        services: ServiceContainer = Depends(get_services),
+    ) -> Response:
+        deleted = await services.site_service.delete_site(site_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="site not found")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get(
         "/sites/{site_id}/versions",

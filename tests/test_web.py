@@ -184,6 +184,47 @@ def test_scheduler_run_now_and_proxy_html(settings, fixture_map) -> None:
         assert "第一条新闻" in payload["html"]
 
 
+def test_delete_site_removes_site_and_related_records(settings, fixture_map) -> None:
+    headers = build_auth_headers(settings.api_token or "")
+    app = build_app(
+        settings=settings,
+        spec_generator=HeuristicSiteSpecGenerator(),
+        with_scheduler=False,
+    )
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/v1/sites",
+            json={"seed_url": FIXTURE_URL_1, "list_locator_hint": ".main_conRCb"},
+            headers=headers,
+        )
+        create_task = wait_for_task_completion(
+            client,
+            create_response.json()["task_id"],
+            headers=headers,
+        )
+        site_id = create_task["result_json"]["site_id"]
+
+        delete_response = client.delete(f"/api/v1/sites/{site_id}", headers=headers)
+        assert delete_response.status_code == 204
+        assert delete_response.text == ""
+
+        site_detail_response = client.get(f"/api/v1/sites/{site_id}", headers=headers)
+        assert site_detail_response.status_code == 404
+        assert site_detail_response.json()["detail"] == "site not found"
+
+        sites_response = client.get("/api/v1/sites", headers=headers)
+        assert sites_response.status_code == 200
+        assert sites_response.json()["items"] == []
+
+        articles_response = client.get(
+            "/api/v1/articles",
+            params={"site_id": site_id},
+            headers=headers,
+        )
+        assert articles_response.status_code == 200
+        assert articles_response.json()["items"] == []
+
+
 def test_health_is_public_but_other_api_requires_token(settings, fixture_map) -> None:
     app = build_app(
         settings=settings,
