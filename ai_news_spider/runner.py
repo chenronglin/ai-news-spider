@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
@@ -36,6 +39,29 @@ class CandidateRunner:
         template = self.template_env.get_template("candidate_runner.py.j2")
         return template.render(spec_json=spec.model_dump_json(indent=2))
 
+    def _resolve_python_executable(self) -> str:
+        override = os.getenv("AI_NEWS_SPIDER_PYTHON_BIN", "").strip()
+        candidate_paths = [
+            Path(override) if override else None,
+            Path(sys.executable) if sys.executable else None,
+            self.settings.base_dir / ".venv" / "bin" / "python",
+            self.settings.base_dir / ".venv" / "Scripts" / "python.exe",
+        ]
+
+        for candidate in candidate_paths:
+            if candidate and candidate.exists():
+                return str(candidate)
+
+        for command in ("python3", "python"):
+            resolved = shutil.which(command)
+            if resolved:
+                return resolved
+
+        raise RuntimeError(
+            "未找到可用的 Python 解释器。请通过 AI_NEWS_SPIDER_PYTHON_BIN 指定路径，"
+            "或确保当前进程运行在可用的 Python/venv 中。"
+        )
+
     async def run(
         self,
         spec: SiteSpec,
@@ -51,6 +77,7 @@ class CandidateRunner:
                 payload.get("run_type"),
                 payload.get("max_pages"),
             )
+            python_executable = self._resolve_python_executable()
             env = os.environ.copy()
             env["PYTHONPATH"] = (
                 str(self.settings.base_dir)
@@ -58,7 +85,7 @@ class CandidateRunner:
                 else f"{self.settings.base_dir}{os.pathsep}{env['PYTHONPATH']}"
             )
             completed = subprocess.run(
-                ["uv", "run", "python", str(script_path)],
+                [python_executable, str(script_path)],
                 cwd=self.settings.base_dir,
                 env=env,
                 input=json.dumps(payload, ensure_ascii=False),

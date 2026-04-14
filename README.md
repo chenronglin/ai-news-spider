@@ -556,3 +556,23 @@ uv run pytest
 - 页面结构变化后，需要重新生成并重新审批版本
 - 当前不包含认证、授权与多用户审计
 - 当前任务执行器是单进程单并发设计，适合单机内部工具场景
+
+
+## 启动和停止crawl4ai服务
+
+启动
+``` bash
+docker run -d   -p 11235:11235   --name crawl4ai   --env-file .llm.env   --shm-size=1g   unclecode/crawl4ai:latest
+```
+停止
+``` bash
+docker stop crawl4ai && docker rm crawl4ai
+```
+
+.llm.env 配置
+```
+LLM_PROVIDER=openai/gpt-5-mini
+OPENAI_TEMPERATURE=0.7
+OPENAI_BASE_URL=https://yunwu.ai/v1
+OPENAI_API_KEY=sk-XXX
+```

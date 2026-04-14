@@ -3,7 +3,8 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
 
-ARTICLE_URL = "https://lxy.shzu.edu.cn/2026/0412/c528a230917/page.htm"
+# ARTICLE_URL = "https://lxy.shzu.edu.cn/2026/0412/c528a230917/page.htm"
+ARTICLE_URL = "https://yz.shmtu.edu.cn/2026/0326/c8927a289142/page.htm"
 
 
 async def main():
