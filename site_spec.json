@@ -1,11 +1,11 @@
 {
   "name": "Crawl4AI-Discovered-Site-Spec",
   "listPage": {
-    "url": "https://news.sina.com.cn/china/",
-    "baseSelector": "#mobileclient > li",
+    "url": "https://news.sina.cn/gn?vt=4",
+    "baseSelector": "#j_nav56261_list > section",
     "fields": {
       "title": {
-        "selector": "a[href]",
+        "selector": "h2.m_f_con_t.cm_tit",
         "type": "text",
         "normalize": {
           "trim": true,
@@ -25,7 +25,7 @@
     }
   },
   "detailPage": {
-    "contentSelector": "div.WB_footer.S_bg2:nth-of-type(2)",
+    "contentSelector": "main.page_main.fl_padding > section.j_main_art:nth-of-type(1) > section.s_card.z_c1 > article.art_box",
     "contentType": "html"
   }
 }

@@ -349,30 +349,9 @@ async function crawlPage(targetUrl: string, waitFor?: string) {
         process_iframes: true,
         remove_overlay_elements: true,
         scan_full_page: true,
-        exclude_external_images: true,
-        excluded_tags: ["iframe", "noscript", "aside", "footer", "nav"],
-        exclude_domains: ["doubleclick.net", "ads.google.com", "googlesyndication.com", "adservice.google.com", "criteo.com", "trackers.io"],
         ...(waitFor ? { wait_for: waitFor } : {}),
       },
     },
-    hooks: {
-      on_page_context_created: `
-async def on_page_context_created(page, context, **kwargs):
-    async def route_handler(route):
-        url = route.request.url.lower()
-        ad_domains = [
-            "doubleclick", "ads.google", "googlesyndication", 
-            "adservice", "trackers.io", "criteo.com", "analytics"
-        ]
-        if any(ad in url for ad in ad_domains):
-            await route.abort()
-        else:
-            await route.continue_()
-            
-    await page.route("**/*", route_handler)
-    return page
-`
-    }
   };
 
   return fetchJsonWithTimeout(
