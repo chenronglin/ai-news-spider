@@ -1,0 +1,17 @@
+{
+  "name": "notice_list_items",
+  "baseSelector": ".n_right a",
+  "fields": [
+    {
+      "name": "title",
+      "selector": "",
+      "type": "text"
+    },
+    {
+      "name": "url",
+      "selector": "",
+      "type": "attribute",
+      "attribute": "href"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "task_id": "llm_1776317317_140025054149760",
+  "status": "completed",
+  "created_at": "2026-04-16T05:28:37.720510",
+  "url": "https://cmm.ncut.edu.cn/index/tzgg.htm",
+  "_links": {
+    "self": {
+      "href": "http://118.195.150.71:11235//llm/llm_1776317317_140025054149760"
+    },
+    "refresh": {
+      "href": "http://118.195.150.71:11235//llm/llm_1776317317_140025054149760"
+    }
+  },
+  "result": [
+    {
+      "render": "static",
+      "list_extraction": {
+        "strategy": "css",
+        "container": ".n_right",
+        "item": ".n_right a",
+        "fields": {
+          "title": {
+            "selector": "",
+            "attr": "text"
+          },
+          "url": {
+            "selector": "",
+            "attr": "href"
+          },
+          "date": {
+            "selector": "",
+            "attr": "text",
+            "format": "YYYY-MM-DD"
+          }
+        },
+        "pagination": {
+          "enabled": false,
+          "next_page_selector": ""
+        }
+      },
+      "error": false
+    }
+  ]
+}

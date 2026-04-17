@@ -1,0 +1,31 @@
+{
+  "name": "Crawl4AI-Discovered-Site-Spec",
+  "listPage": {
+    "url": "https://news.sina.com.cn/china/",
+    "baseSelector": "#mobileclient > li",
+    "fields": {
+      "title": {
+        "selector": "a[href]",
+        "type": "text",
+        "normalize": {
+          "trim": true,
+          "collapseWhitespace": true,
+          "stripLeadingField": "date"
+        }
+      },
+      "url": {
+        "selector": "a[href]",
+        "type": "attribute",
+        "attribute": "href",
+        "normalize": {
+          "trim": true,
+          "resolveUrl": true
+        }
+      }
+    }
+  },
+  "detailPage": {
+    "contentSelector": "div.WB_footer.S_bg2:nth-of-type(2)",
+    "contentType": "html"
+  }
+}

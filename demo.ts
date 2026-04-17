@@ -1,0 +1,1404 @@
+import { load, type CheerioAPI, type Element } from "cheerio";
+
+/**
+ * Crawl4AI Docker API + Bun/TypeScript 版站点发现脚本。
+ *
+ * 核心策略：
+ * 1. 通过 Crawl4AI /crawl 获取渲染后的 HTML。
+ * 2. 在本地做 DOM 级启发式分析，优先发现列表和详情选择器。
+ * 3. 只把 LLM 当作可选补充，而不是主判官。
+ * 4. 用更严格的质量校验筛掉“能返回但明显错”的候选。
+ *
+ * 这比“直接把 prompt 扔给 /llm/job，再信任返回的 selector”稳定得多，
+ * 也更符合 Crawl4AI 官方文档对结构化页面的建议。
+ */
+
+const BASE_URL = process.env.BASE_URL;
+if (!BASE_URL) {
+  console.error("错误: 未找到 BASE_URL，请检查 .env");
+  process.exit(1);
+}
+
+const DEFAULT_LIST_URL = "https://cmm.ncut.edu.cn/index/tzgg.htm";
+const DEFAULT_LIST_SCOPE = ".n_right";
+const DEFAULT_DETAIL_SCOPE = ".contain_con";
+const NETWORK_TIMEOUT_MS = 45_000;
+const CRAWL_TIMEOUT_MS = 90_000;
+const SHOW_DEBUG_OUTPUT =
+  process.env.DEBUG_OUTPUT === "1" || process.env.DEBUG_OUTPUT?.toLowerCase() === "true";
+const SITE_SPEC_PATH = "site_spec.json";
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const FILE_EXTENSIONS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar"];
+const TITLE_HINTS = ["title", "name", "subject", "headline", "value", "tit"];
+const DATE_HINTS = ["date", "time", "publish", "pub", "riqi", "rq"];
+
+interface RuntimeConfig {
+  listUrl: string;
+  listScope: string;
+  detailScope: string;
+}
+
+interface PageSnapshot {
+  finalUrl: string;
+  html: string;
+  rawHtml: string;
+  markdown: string;
+}
+
+interface SelectorFieldSpec {
+  selector: string;
+  type: "text" | "attribute";
+  attribute?: string;
+  normalize?: {
+    trim?: boolean;
+    collapseWhitespace?: boolean;
+    resolveUrl?: boolean;
+    stripLeadingField?: string;
+  };
+}
+
+type AttachmentSource = "attribute" | "text" | "html-regex";
+
+interface AttachmentSpec {
+  selector?: string;
+  source: AttachmentSource;
+  attribute?: string;
+  pattern?: string;
+  patternFlags?: string;
+  resolveUrl?: boolean;
+}
+
+interface SiteSpec {
+  name: string;
+  listPage: {
+    url: string;
+    baseSelector: string;
+    fields: {
+      title: SelectorFieldSpec;
+      url: SelectorFieldSpec;
+      date?: SelectorFieldSpec;
+    };
+  };
+  detailPage: {
+    contentSelector: string;
+    contentType: "html";
+    attachment?: AttachmentSpec;
+  };
+}
+
+interface NewsListSelectorSet {
+  baseSelector: string;
+  titleSelector: string;
+  urlSelector: string;
+  dateSelector: string;
+  score: number;
+  reason: string;
+  heading: string;
+}
+
+interface NewsDetailSelectorSet {
+  contentSelector: string;
+  attachmentSelector: string;
+  attachmentSource: AttachmentSource;
+  attachmentAttribute?: string;
+  attachmentPattern: string;
+  score: number;
+  reason: string;
+}
+
+interface NormalizedListItem {
+  title: string;
+  url: string;
+  date: string;
+}
+
+interface NormalizedDetailResult {
+  content: string;
+  attachmentUrl: string;
+}
+
+interface EvaluatedListCandidate {
+  candidate: NewsListSelectorSet;
+  items: NormalizedListItem[];
+  score: number;
+  reason: string;
+}
+
+interface EvaluatedDetailCandidate {
+  candidate: NewsDetailSelectorSet;
+  content: string;
+  attachmentUrl: string;
+  score: number;
+  reason: string;
+}
+
+function parseRuntimeConfig(argv = Bun.argv.slice(2)): RuntimeConfig {
+  const [listUrl = DEFAULT_LIST_URL, listScope = DEFAULT_LIST_SCOPE, detailScope = DEFAULT_DETAIL_SCOPE] = argv;
+  return { listUrl, listScope, detailScope };
+}
+
+const RUNTIME = parseRuntimeConfig();
+const LIST_URL = RUNTIME.listUrl;
+const LIST_SCOPE = RUNTIME.listScope;
+const DETAIL_SCOPE = RUNTIME.detailScope;
+
+function separator(title: string) {
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`  ${title}`);
+  console.log(`${"=".repeat(60)}\n`);
+}
+
+function debugLog(...args: unknown[]) {
+  if (SHOW_DEBUG_OUTPUT) {
+    console.log(...args);
+  }
+}
+
+function debugSeparator(title: string) {
+  if (SHOW_DEBUG_OUTPUT) {
+    separator(title);
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeWhitespace(value: string, collapseWhitespace = true) {
+  if (!collapseWhitespace) return value;
+  return value.replace(/\s+/g, " ");
+}
+
+function trimText(value: unknown) {
+  return normalizeWhitespace(String(value ?? ""), true).trim();
+}
+
+function unique<T>(values: T[]) {
+  return Array.from(new Set(values));
+}
+
+function parseSelectorList(input: string) {
+  return unique(
+    input
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean),
+  );
+}
+
+function formatDateParts(year: string, month: string, day: string) {
+  const y = year.padStart(4, "0");
+  const m = month.padStart(2, "0");
+  const d = day.padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function normalizeDateText(input: string) {
+  const text = trimText(input);
+  if (!text) return "";
+
+  const archMatch = text.match(/\b(\d{4})\.(\d{2})-(\d{2})\b/);
+  if (archMatch) {
+    return formatDateParts(archMatch[1], archMatch[2], archMatch[3]);
+  }
+
+  const isoMatch = text.match(/\b(\d{4})[./-](\d{1,2})[./-](\d{1,2})\b/);
+  if (isoMatch) {
+    return formatDateParts(isoMatch[1], isoMatch[2], isoMatch[3]);
+  }
+
+  if (/[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}/.test(text) || /\bCST\b/.test(text)) {
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) {
+      return formatDateParts(
+        String(parsed.getFullYear()),
+        String(parsed.getMonth() + 1),
+        String(parsed.getDate()),
+      );
+    }
+  }
+
+  return text;
+}
+
+function extractLeadingDateFromText(text: string) {
+  const trimmed = trimText(text);
+  const patterns = [
+    /^\s*((?:\d{4}[./-]\d{1,2}[./-]\d{1,2})|(?:\d{4}\.\d{2}-\d{2}))\s+/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match?.[1]) {
+      return {
+        date: normalizeDateText(match[1]),
+        title: trimmed.slice(match[0].length).trim(),
+      };
+    }
+  }
+
+  return {
+    date: "",
+    title: trimmed,
+  };
+}
+
+function isLikelyDateText(text: string) {
+  const value = trimText(text);
+  if (!value) return false;
+  return (
+    /\b\d{4}[./-]\d{1,2}[./-]\d{1,2}\b/.test(value) ||
+    /\b\d{4}\.\d{2}-\d{2}\b/.test(value) ||
+    /(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Z][a-z]{2}\s+\d{1,2}/.test(value)
+  );
+}
+
+function htmlToText(html: string) {
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6]|section|article|table|thead|tbody|tfoot)>/gi, "\n")
+    .replace(/<\/(td|th)>/gi, " | ")
+    .replace(/<[^>]+>/g, " ");
+
+  text = decodeHtmlEntities(text);
+  text = text.replace(/[ \t]+\n/g, "\n");
+  text = text.replace(/\n[ \t]+/g, "\n");
+  text = text.replace(/\n{3,}/g, "\n\n");
+  text = text.replace(/[ \t]{2,}/g, " ");
+  return text.trim();
+}
+
+function decodeHtmlEntities(text: string) {
+  const entities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+  };
+
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (full, entity: string) => {
+    if (entity.startsWith("#x") || entity.startsWith("#X")) {
+      const codePoint = Number.parseInt(entity.slice(2), 16);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : full;
+    }
+    if (entity.startsWith("#")) {
+      const codePoint = Number.parseInt(entity.slice(1), 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : full;
+    }
+    return entities[entity] ?? full;
+  });
+}
+
+async function fetchJsonWithTimeout(url: string, init: RequestInit | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { status: res.status, raw: text };
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchTextWithTimeout(url: string, init: RequestInit | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function crawlPage(targetUrl: string, waitFor?: string) {
+  const payload = {
+    urls: [targetUrl],
+    browser_config: {
+      type: "BrowserConfig",
+      params: {
+        headless: true,
+        java_script_enabled: true,
+        user_agent: USER_AGENT,
+        light_mode: true,
+        viewport: {
+          type: "dict",
+          value: { width: 1440, height: 900 },
+        },
+      },
+    },
+    crawler_config: {
+      type: "CrawlerRunConfig",
+      params: {
+        cache_mode: "bypass",
+        wait_until: "networkidle",
+        page_timeout: 30000,
+        delay_before_return_html: 1.0,
+        process_iframes: true,
+        remove_overlay_elements: true,
+        scan_full_page: true,
+        ...(waitFor ? { wait_for: waitFor } : {}),
+      },
+    },
+  };
+
+  return fetchJsonWithTimeout(
+    `${BASE_URL}/crawl`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    CRAWL_TIMEOUT_MS,
+  );
+}
+
+async function fetchRawHtml(url: string) {
+  return fetchTextWithTimeout(
+    url,
+    {
+      headers: {
+        "User-Agent": USER_AGENT,
+      },
+    },
+    NETWORK_TIMEOUT_MS,
+  );
+}
+
+async function fetchMarkdown(url: string) {
+  try {
+    const response = await fetchJsonWithTimeout(
+      `${BASE_URL}/md`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, f: "fit", q: "article content", c: "0" }),
+      },
+      NETWORK_TIMEOUT_MS,
+    );
+    return trimText((response as { markdown?: unknown }).markdown ?? (response as { content?: unknown }).content);
+  } catch {
+    return "";
+  }
+}
+
+function getCrawlResultPayload(response: any) {
+  if (Array.isArray(response?.results) && response.results.length > 0) return response.results[0];
+  if (Array.isArray(response) && response.length > 0) return response[0];
+  return response;
+}
+
+async function fetchPageSnapshot(targetUrl: string, waitFor?: string): Promise<PageSnapshot> {
+  let rawHtml = "";
+  try {
+    rawHtml = await fetchRawHtml(targetUrl);
+  } catch {
+    rawHtml = "";
+  }
+
+  try {
+    const response = await crawlPage(targetUrl, waitFor);
+    const first = getCrawlResultPayload(response);
+    const html = String(first?.html ?? first?.cleaned_html ?? "");
+    const markdown = trimText(first?.markdown ?? "");
+    const finalUrl = String(first?.url ?? targetUrl);
+    if (html) {
+      return { finalUrl, html, rawHtml: rawHtml || html, markdown };
+    }
+  } catch (error) {
+    debugLog("Crawl4AI /crawl 失败，退回原站直连 HTML:", error instanceof Error ? error.message : String(error));
+  }
+
+  const html = rawHtml || (await fetchRawHtml(targetUrl));
+  return { finalUrl: targetUrl, html, rawHtml: html, markdown: "" };
+}
+
+function getClassList(element: Element) {
+  const raw = element.attribs?.class ?? "";
+  return raw
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function sanitizeCssToken(token: string) {
+  if (!token) return "";
+  const safe = token.replace(/[^a-zA-Z0-9_-]/g, "");
+  return safe;
+}
+
+function interestingClasses(element: Element) {
+  return getClassList(element).filter((item) => {
+    const lowered = item.toLowerCase();
+    if (!sanitizeCssToken(item)) return false;
+    if (lowered.startsWith("js-")) return false;
+    if (["active", "current", "on", "off", "hover"].includes(lowered)) return false;
+    return true;
+  });
+}
+
+function elementTag(element: Element) {
+  return element.tagName.toLowerCase();
+}
+
+function getParentElement(element: Element) {
+  const parent = element.parent;
+  return parent && parent.type === "tag" ? (parent as Element) : null;
+}
+
+function isDirectChildOf(parent: Element, child: Element) {
+  return getParentElement(child) === parent;
+}
+
+function nodePiece($: CheerioAPI, element: Element) {
+  const tag = elementTag(element);
+  const id = sanitizeCssToken(element.attribs?.id ?? "");
+  if (id) {
+    return `#${id}`;
+  }
+
+  const classes = interestingClasses(element).map(sanitizeCssToken).filter(Boolean).slice(0, 2);
+  let piece = tag;
+  if (classes.length > 0) {
+    piece = `${tag}.${classes.join(".")}`;
+  }
+
+  const parent = getParentElement(element);
+  if (!parent) {
+    return piece;
+  }
+
+  const siblings = $(parent)
+    .children(tag)
+    .toArray()
+    .filter((node) => node.type === "tag") as Element[];
+
+  if (siblings.length > 1) {
+    const index = siblings.findIndex((node) => node === element);
+    if (index >= 0) {
+      piece = `${piece}:nth-of-type(${index + 1})`;
+    }
+  }
+
+  return piece;
+}
+
+function absoluteSelector($: CheerioAPI, element: Element) {
+  const pieces: string[] = [];
+  let current: Element | null = element;
+
+  while (current) {
+    const tag = elementTag(current);
+    const piece = nodePiece($, current);
+    if (tag === "html") break;
+    if (tag === "body" && pieces.length > 0) break;
+    pieces.unshift(piece);
+    if (piece.startsWith("#")) break;
+    current = getParentElement(current);
+  }
+
+  return pieces.join(" > ") || elementTag(element);
+}
+
+function selectorDepth(selector: string) {
+  return selector.split(",")[0]?.split(">").length ?? 1;
+}
+
+function textOfNode($: CheerioAPI, element: Element) {
+  return trimText($(element).text());
+}
+
+function htmlOfNode($: CheerioAPI, element: Element) {
+  return $.html(element) ?? "";
+}
+
+function selectorMatchesTarget($: CheerioAPI, root: Element, target: Element, selector: string) {
+  if (selector === ":self") return root === target;
+  try {
+    const matches = $(root).find(selector).toArray() as Element[];
+    return matches.length === 1 && matches[0] === target;
+  } catch {
+    return false;
+  }
+}
+
+function bestRelativeSelector($: CheerioAPI, root: Element, target: Element) {
+  if (root === target) return ":self";
+
+  const tag = elementTag(target);
+  const candidates = new Set<string>();
+  const id = sanitizeCssToken(target.attribs?.id ?? "");
+
+  if (id) {
+    candidates.add(`#${id}`);
+  }
+
+  if (tag === "a" && $(target).attr("href")) {
+    candidates.add("a[href]");
+  }
+
+  const classes = interestingClasses(target).map(sanitizeCssToken).filter(Boolean).slice(0, 2);
+  if (classes.length > 0) {
+    candidates.add(`${tag}.${classes.join(".")}`);
+  }
+
+  candidates.add(tag);
+
+  const path: string[] = [];
+  let current: Element | null = target;
+  while (current && current !== root) {
+    path.unshift(nodePiece($, current));
+    const joined = path.join(" > ");
+    candidates.add(joined);
+    current = getParentElement(current);
+  }
+
+  for (const candidate of candidates) {
+    if (selectorMatchesTarget($, root, target, candidate)) {
+      return candidate;
+    }
+  }
+
+  return path.join(" > ") || tag;
+}
+
+function scoreArticleHref(href: string) {
+  const lowered = href.toLowerCase();
+  if (!lowered || lowered.startsWith("javascript:")) return -5;
+  if (/\.(pdf|docx?|xlsx?|xls|pptx?|zip|rar)(\?|$)/i.test(lowered)) return 6;
+  if (/\/(info|view|detail|article|news|bulletin|content|page|show)\b/.test(lowered)) return 12;
+  if (/\.(html?|shtml|dhtml)(\?|$)/i.test(lowered)) return 8;
+  if (/\/sch\//.test(lowered)) return 5;
+  return 2;
+}
+
+function headingWeight(text: string) {
+  const value = trimText(text);
+  if (!value) return 0;
+
+  let score = 0;
+  if (/公告|通知/.test(value)) score += 40;
+  if (/新闻|动态/.test(value)) score += 20;
+  if (/招生信息|招生简章/.test(value)) score += 12;
+  if (/调剂/.test(value)) score += 8;
+  if (/院校概况|简介|联系我们|关注我们/.test(value)) score -= 30;
+  return score;
+}
+
+function structurePenalty(selector: string, text: string) {
+  const combined = `${selector} ${text}`.toLowerCase();
+  if (/(footer|foot|copyright|contact|head|header|nav|menu|breadcrumb|crumb)/.test(combined)) return 60;
+  return 0;
+}
+
+function nearestHeadingText($: CheerioAPI, element: Element) {
+  const headingSelectors = "h1,h2,h3,h4,h5,h6,.title,.name,.sch-column-title";
+  let current: Element | null = element;
+
+  while (current) {
+    const selfHeading = $(current).children(headingSelectors).first();
+    if (selfHeading.length) {
+      const text = trimText(selfHeading.text());
+      if (text) return text;
+    }
+
+    const previousHeading = $(current).prevAll(headingSelectors).first();
+    if (previousHeading.length) {
+      const text = trimText(previousHeading.text());
+      if (text) return text;
+    }
+
+    current = getParentElement(current);
+  }
+
+  return "";
+}
+
+function discoverListCandidates(
+  $: CheerioAPI,
+  manualScopes: string[],
+): NewsListSelectorSet[] {
+  const candidates: NewsListSelectorSet[] = [];
+  const seen = new Set<string>();
+
+  const scopeRoots = manualScopes
+    .flatMap((selector) => {
+      try {
+        return $(selector).toArray() as Element[];
+      } catch {
+        return [];
+      }
+    })
+    .filter((node) => node.type === "tag") as Element[];
+
+  const roots = scopeRoots.length > 0 ? unique(scopeRoots) : (($("body").toArray() as Element[]) ?? []);
+  const selectorPool = new Set<string>([
+    "ul",
+    "ol",
+    "div",
+    "section",
+    "article",
+    "main",
+    "table",
+    "tbody",
+  ]);
+
+  for (const root of roots) {
+    const containers = [
+      root,
+      ...($(root).find(Array.from(selectorPool).join(",")).toArray() as Element[]),
+    ];
+
+    for (const container of containers) {
+      const grouped = new Map<string, Element[]>();
+      const directChildren = ($(container).children().toArray() as Element[]).filter((node) => node.type === "tag");
+      if (directChildren.length < 2) continue;
+
+      for (const child of directChildren) {
+        const tag = elementTag(child);
+        if (tag === "script" || tag === "style") continue;
+        const bucket = grouped.get(tag) ?? [];
+        bucket.push(child);
+        grouped.set(tag, bucket);
+      }
+
+      for (const [tag, items] of grouped.entries()) {
+        if (items.length < 2) continue;
+
+        const linkHits = items.filter((item) => {
+          if ($(item).attr("href")) return true;
+          return $(item).find("a[href]").length > 0;
+        });
+
+        if (linkHits.length < 2) continue;
+
+        const baseSelector = `${absoluteSelector($, container)} > ${tag}`;
+        if (seen.has(baseSelector)) continue;
+        seen.add(baseSelector);
+
+        const urlSelector = inferLinkSelector($, items);
+        const titleSelector = inferTitleSelector($, items, urlSelector);
+        const dateSelector = inferDateSelector($, items);
+        const heading = nearestHeadingText($, container);
+
+        const score =
+          scoreItemGroup($, items, baseSelector) +
+          headingWeight(heading) +
+          (scopeRoots.some((scopeRoot) => scopeRoot === root) ? 18 : 0) -
+          structurePenalty(baseSelector, heading);
+
+        candidates.push({
+          baseSelector,
+          titleSelector,
+          urlSelector,
+          dateSelector,
+          score,
+          reason: `group:${baseSelector}`,
+          heading,
+        });
+      }
+    }
+  }
+
+  return candidates.sort((left, right) => right.score - left.score);
+}
+
+function scoreItemGroup($: CheerioAPI, items: Element[], selector: string) {
+  const sample = items.slice(0, 12);
+  const count = sample.length || 1;
+  let linkHits = 0;
+  let dateHits = 0;
+  let articleHits = 0;
+  const titleLengths: number[] = [];
+
+  for (const item of sample) {
+    const anchor = $(item).attr("href")
+      ? item
+      : (($(item).find("a[href]").first().get(0) as Element | undefined) ?? null);
+
+    if (anchor) {
+      linkHits += 1;
+      const href = String($(anchor).attr("href") ?? "");
+      articleHits += Math.max(scoreArticleHref(href), 0);
+    }
+
+    const text = trimText($(item).text());
+    if (isLikelyDateText(text)) {
+      dateHits += 1;
+    }
+    titleLengths.push(text.length);
+  }
+
+  const avgTextLen = titleLengths.length > 0 ? titleLengths.reduce((sum, value) => sum + value, 0) / titleLengths.length : 0;
+
+  let score = 0;
+  score += Math.min(items.length, 30);
+  score += (linkHits / count) * 30;
+  score += (dateHits / count) * 35;
+  score += Math.min(articleHits, 30);
+  if (avgTextLen >= 8 && avgTextLen <= 180) {
+    score += 12;
+  } else if (avgTextLen < 5) {
+    score -= 20;
+  }
+  score -= Math.max(selectorDepth(selector) - 4, 0) * 1.5;
+  return score;
+}
+
+function inferLinkSelector($: CheerioAPI, items: Element[]) {
+  const ranked = new Map<string, number>();
+
+  const add = (selector: string, score: number) => {
+    ranked.set(selector, (ranked.get(selector) ?? 0) + score);
+  };
+
+  for (const item of items.slice(0, 8)) {
+    if ($(item).attr("href")) {
+      add(":self", 15);
+    }
+
+    const directAnchor = $(item).children("a[href]").first().get(0) as Element | undefined;
+    if (directAnchor) {
+      add(bestRelativeSelector($, item, directAnchor), 12);
+    }
+
+    const anyAnchor = $(item).find("a[href]").first().get(0) as Element | undefined;
+    if (anyAnchor) {
+      add(bestRelativeSelector($, item, anyAnchor), 8);
+    }
+  }
+
+  return Array.from(ranked.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "a[href]";
+}
+
+function inferTitleSelector($: CheerioAPI, items: Element[], preferredLinkSelector: string) {
+  const ranked = new Map<string, number>();
+
+  const add = (selector: string, score: number) => {
+    ranked.set(selector, Math.max(ranked.get(selector) ?? 0, score));
+  };
+
+  for (const item of items.slice(0, 8)) {
+    const nodes = $(item).find("*").toArray() as Element[];
+    for (const node of nodes) {
+      const text = trimText($(node).text());
+      if (!text || isLikelyDateText(text) || text.length < 6) continue;
+
+      let score = 0;
+      const tag = elementTag(node);
+      const attrs = `${node.attribs?.id ?? ""} ${node.attribs?.class ?? ""} ${node.attribs?.title ?? ""}`.toLowerCase();
+
+      if (["h1", "h2", "h3", "h4", "strong", "b"].includes(tag)) score += 20;
+      if (TITLE_HINTS.some((hint) => attrs.includes(hint))) score += 22;
+      if (DATE_HINTS.some((hint) => attrs.includes(hint))) score -= 12;
+      if (tag === "a") score += 10;
+      if (text.length >= 8 && text.length <= 120) score += 10;
+      if (text.length > 160) score -= 8;
+
+      if (score <= 0) continue;
+      add(bestRelativeSelector($, item, node), score);
+    }
+
+    if (preferredLinkSelector) {
+      const preferredNode = selectFirstWithin($, item, preferredLinkSelector);
+      if (preferredNode) {
+        const text = trimText($(preferredNode).text());
+        if (text.length >= 6 && text.length <= 120) {
+          add(preferredLinkSelector, 16);
+        }
+      }
+    }
+  }
+
+  return Array.from(ranked.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? preferredLinkSelector ?? "a";
+}
+
+function inferDateSelector($: CheerioAPI, items: Element[]) {
+  const ranked = new Map<string, number>();
+
+  const add = (selector: string, score: number) => {
+    ranked.set(selector, Math.max(ranked.get(selector) ?? 0, score));
+  };
+
+  for (const item of items.slice(0, 8)) {
+    const nodes = $(item).find("*").toArray() as Element[];
+    for (const node of nodes) {
+      const text = trimText($(node).text());
+      if (!text) continue;
+
+      const attrs = `${node.attribs?.id ?? ""} ${node.attribs?.class ?? ""}`.toLowerCase();
+      let score = 0;
+      if (isLikelyDateText(text)) score += 18;
+      if (DATE_HINTS.some((hint) => attrs.includes(hint))) score += 12;
+      if (!/^\d{4}[./-]\d{1,2}[./-]\d{1,2}$/.test(normalizeDateText(text))) {
+        if (text.length > 20) score -= 18;
+      }
+      if (text.length > 40) score -= 10;
+      if (score <= 0) continue;
+
+      add(bestRelativeSelector($, item, node), score);
+    }
+  }
+
+  return Array.from(ranked.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+}
+
+function selectFirstWithin($: CheerioAPI, root: Element, selector: string) {
+  if (!selector || selector === ":self") return root;
+  try {
+    return ($(root).find(selector).first().get(0) as Element | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeListItems(rawItems: Array<Record<string, unknown>>, baseUrl: string): NormalizedListItem[] {
+  return rawItems
+    .map((item) => {
+      const rawTitle = trimText(item.title);
+      const rawDate = normalizeDateText(trimText(item.date));
+      const inferred = rawDate ? { date: rawDate, title: rawTitle } : extractLeadingDateFromText(rawTitle);
+      const title = trimText(inferred.title);
+      const date = normalizeDateText(rawDate || inferred.date);
+      const rawUrl = trimText(item.url);
+      let url = rawUrl;
+      if (url) {
+        try {
+          url = new URL(url, baseUrl).toString();
+        } catch {
+          url = rawUrl;
+        }
+      }
+
+      return { title, url, date };
+    })
+    .filter((item) => item.title && item.url);
+}
+
+function extractListItemsWithSelectors(
+  $: CheerioAPI,
+  selectors: Pick<NewsListSelectorSet, "baseSelector" | "titleSelector" | "urlSelector" | "dateSelector">,
+  baseUrl: string,
+) {
+  const rawItems: Array<Record<string, unknown>> = [];
+  const elements = $(selectors.baseSelector).toArray() as Element[];
+
+  for (const item of elements) {
+    const titleNode = selectFirstWithin($, item, selectors.titleSelector);
+    const urlNode = selectFirstWithin($, item, selectors.urlSelector);
+    const dateNode = selectors.dateSelector ? selectFirstWithin($, item, selectors.dateSelector) : null;
+
+    const title = titleNode ? trimText($(titleNode).text()) : "";
+    let url = "";
+    if (urlNode) {
+      url = trimText($(urlNode).attr("href") ?? "");
+    }
+    const date = dateNode ? trimText($(dateNode).text()) : "";
+
+    rawItems.push({ title, url, date });
+  }
+
+  const items = normalizeListItems(rawItems, baseUrl);
+  const deduped = new Map<string, NormalizedListItem>();
+  for (const item of items) {
+    if (!deduped.has(item.url)) {
+      deduped.set(item.url, item);
+    }
+  }
+  return Array.from(deduped.values());
+}
+
+function evaluateListCandidate(
+  $: CheerioAPI,
+  candidate: NewsListSelectorSet,
+  baseUrl: string,
+): EvaluatedListCandidate | null {
+  let items: NormalizedListItem[] = [];
+  try {
+    items = extractListItemsWithSelectors($, candidate, baseUrl);
+  } catch (error) {
+    return {
+      candidate,
+      items: [],
+      score: -Infinity,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (items.length === 0) {
+    return {
+      candidate,
+      items,
+      score: -Infinity,
+      reason: "selector 提取到 0 条列表项",
+    };
+  }
+
+  const articleLikeCount = items.filter((item) => scoreArticleHref(item.url) >= 5).length;
+  const nonEmptyDateCount = items.filter((item) => item.date).length;
+  const avgTitleLength = items.reduce((sum, item) => sum + item.title.length, 0) / items.length;
+
+  let score = candidate.score;
+  score += Math.min(items.length, 20) * 3;
+  score += articleLikeCount * 4;
+  score += nonEmptyDateCount * 2;
+  if (avgTitleLength >= 6 && avgTitleLength <= 80) score += 12;
+  if (avgTitleLength < 4) score -= 40;
+  if (items.length < 2) score -= 40;
+  if (articleLikeCount === 0) score -= 50;
+
+  return {
+    candidate,
+    items,
+    score,
+    reason: `count=${items.length}, articleLike=${articleLikeCount}, date=${nonEmptyDateCount}, heading=${candidate.heading || "(无)"}`,
+  };
+}
+
+function directFileSelector() {
+  return FILE_EXTENSIONS.map((ext) => `a[href$='.${ext}']`).join(", ");
+}
+
+function findAttachmentUrlInHtml(html: string, targetUrl: string) {
+  const patterns = [
+    /showVsbpdfIframe\("([^"]+)"/i,
+    /window\.open\(['"]([^'"]+\.(?:pdf|docx?|xlsx?|xls|pptx?|zip|rar))['"]\)/i,
+    /href=['"]([^'"]+\.(?:pdf|docx?|xlsx?|xls|pptx?|zip|rar))['"]/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    const raw = match?.[1] ?? "";
+    if (!raw) continue;
+    try {
+      return new URL(raw, targetUrl).toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  return "";
+}
+
+function evaluateDetailNode(
+  $: CheerioAPI,
+  element: Element,
+  detailUrl: string,
+  manualScopeSelectors: string[],
+): EvaluatedDetailCandidate | null {
+  const selector = absoluteSelector($, element);
+  const html = htmlOfNode($, element);
+  const text = htmlToText(html);
+  const attachmentUrl = findAttachmentUrlInHtml(html, detailUrl);
+  const tableCount = $(element).find("table").length;
+  const paragraphCount = $(element).find("p").length;
+  const heading = nearestHeadingText($, element);
+
+  if (!text && !attachmentUrl) return null;
+
+  let score = 0;
+  if (text.length > 0) score += Math.min(text.length, 4000) / 90;
+  if (text.length >= 80) score += 25;
+  if (text.length < 25 && !attachmentUrl) score -= 80;
+  if (tableCount > 0) score += 20;
+  if (paragraphCount > 2) score += 12;
+  if (attachmentUrl) score += 18;
+  if (manualScopeSelectors.some((scope) => scope && selector.includes(scope.replace(/^\./, "")))) score += 12;
+  score += headingWeight(heading);
+  score -= structurePenalty(selector, heading);
+
+  if (selector === "body" || selector.endsWith("> body")) {
+    score -= 100;
+  }
+
+  const fileLink = $(element).find(directFileSelector()).first();
+  let attachmentSelector = "";
+  let attachmentSource: AttachmentSource = "text";
+  let attachmentAttribute: string | undefined;
+  let attachmentPattern = "";
+
+  if (fileLink.length > 0) {
+    const fileNode = fileLink.get(0) as Element | undefined;
+    attachmentSelector = fileNode ? absoluteSelector($, fileNode) : directFileSelector();
+    attachmentSource = "attribute";
+    attachmentAttribute = "href";
+  } else if (/showVsbpdfIframe\(/i.test(html)) {
+    const scriptNode = ($(element)
+      .find("script")
+      .toArray()
+      .find((node) => /showVsbpdfIframe\(/i.test(htmlOfNode($, node))) as Element | undefined) ?? null;
+    attachmentSelector = scriptNode ? absoluteSelector($, scriptNode) : "script";
+    attachmentSource = "text";
+    attachmentPattern = 'showVsbpdfIframe\\("([^"]+)"';
+  }
+
+  return {
+    candidate: {
+      contentSelector: selector,
+      attachmentSelector,
+      attachmentSource,
+      attachmentAttribute,
+      attachmentPattern,
+      score,
+      reason: `text=${text.length}, table=${tableCount}, p=${paragraphCount}, heading=${heading || "(无)"}`,
+    },
+    content: text,
+    attachmentUrl,
+    score,
+    reason: `text=${text.length}, attachment=${attachmentUrl ? "yes" : "no"}, selector=${selector}`,
+  };
+}
+
+function discoverDetailCandidates(
+  $: CheerioAPI,
+  detailUrl: string,
+  manualScopeSelectors: string[],
+): EvaluatedDetailCandidate[] {
+  const nodes: Element[] = [];
+  const seen = new Set<Element>();
+
+  const roots = manualScopeSelectors
+    .flatMap((selector) => {
+      try {
+        return $(selector).toArray() as Element[];
+      } catch {
+        return [];
+      }
+    })
+    .filter((node) => node.type === "tag") as Element[];
+
+  const effectiveRoots = roots.length > 0 ? unique(roots) : (($("body").find("article,main,section,div,td").toArray() as Element[]) ?? []);
+
+  for (const root of effectiveRoots) {
+    const pool = [root, ...($(root).find("article,main,section,div,td").toArray() as Element[])];
+    for (const node of pool) {
+      if (seen.has(node)) continue;
+      seen.add(node);
+      nodes.push(node);
+    }
+  }
+
+  const evaluated: EvaluatedDetailCandidate[] = [];
+  for (const node of nodes) {
+    const candidate = evaluateDetailNode($, node, detailUrl, manualScopeSelectors);
+    if (candidate) {
+      evaluated.push(candidate);
+    }
+  }
+
+  return evaluated.sort((left, right) => right.score - left.score);
+}
+
+function extractDetailResultWithSelectors(
+  $: CheerioAPI,
+  detailUrl: string,
+  selectors: Pick<NewsDetailSelectorSet, "contentSelector" | "attachmentSelector" | "attachmentSource" | "attachmentAttribute" | "attachmentPattern">,
+) {
+  const nodes = $(selectors.contentSelector).toArray() as Element[];
+  const html = nodes.map((node) => htmlOfNode($, node)).join("\n");
+  const content = htmlToText(html);
+
+  let attachmentUrl = "";
+  if (selectors.attachmentSelector) {
+    if (selectors.attachmentSource === "attribute") {
+      const attachmentNode = $(selectors.attachmentSelector).first();
+      const raw = trimText(attachmentNode.attr(selectors.attachmentAttribute ?? "href"));
+      if (raw) {
+        try {
+          attachmentUrl = new URL(raw, detailUrl).toString();
+        } catch {
+          attachmentUrl = raw;
+        }
+      }
+    } else if (selectors.attachmentSource === "text" && selectors.attachmentPattern) {
+      const rawText = $(selectors.attachmentSelector)
+        .toArray()
+        .map((node) => htmlOfNode($, node))
+        .join("\n");
+      attachmentUrl = findAttachmentUrlInHtml(rawText.replace(/\n+/g, " "), detailUrl);
+      if (!attachmentUrl) {
+        const match = rawText.match(new RegExp(selectors.attachmentPattern, "i"));
+        const raw = match?.[1] ?? "";
+        if (raw) {
+          try {
+            attachmentUrl = new URL(raw, detailUrl).toString();
+          } catch {
+            attachmentUrl = raw;
+          }
+        }
+      }
+    }
+  }
+
+  if (!attachmentUrl) {
+    attachmentUrl = findAttachmentUrlInHtml($.html(), detailUrl);
+  }
+
+  return { content, attachmentUrl };
+}
+
+async function discoverListSelectors(listPage: PageSnapshot): Promise<NewsListSelectorSet> {
+  separator("Step 1: 本地发现列表页结构");
+
+  const $ = load(listPage.html);
+  const manualScopes = parseSelectorList(LIST_SCOPE);
+  const heuristicCandidates = discoverListCandidates($, manualScopes);
+
+  if (heuristicCandidates.length === 0) {
+    throw new Error("未发现可用的列表候选，请检查页面是否包含可重复的文章列表。");
+  }
+
+  const evaluated = heuristicCandidates
+    .slice(0, 20)
+    .map((candidate) => evaluateListCandidate($, candidate, listPage.finalUrl))
+    .filter(Boolean) as EvaluatedListCandidate[];
+
+  if (evaluated.length === 0) {
+    throw new Error("列表候选存在，但全部通过不了提取校验。");
+  }
+
+  const best = evaluated.sort((left, right) => right.score - left.score)[0];
+  debugLog("列表候选 Top 5:");
+  for (const item of evaluated.slice(0, 5)) {
+    debugLog(JSON.stringify({ score: item.score, reason: item.reason, candidate: item.candidate }, null, 2));
+  }
+
+  return {
+    ...best.candidate,
+    score: best.score,
+    reason: best.reason,
+  };
+}
+
+function extractListItems(listPage: PageSnapshot, selectors: NewsListSelectorSet) {
+  separator("Step 2: 提取并验证列表页");
+
+  const $ = load(listPage.html);
+  const items = extractListItemsWithSelectors($, selectors, listPage.finalUrl);
+
+  debugLog("列表选择器:", JSON.stringify(selectors, null, 2));
+  debugLog(`提取到 ${items.length} 条列表项`);
+  items.slice(0, 5).forEach((item, index) => {
+    debugLog(`[${index + 1}] ${item.date || "(无日期)"} | ${item.title} | ${item.url}`);
+  });
+
+  return items;
+}
+
+async function discoverDetailSelectors(detailPage: PageSnapshot): Promise<NewsDetailSelectorSet> {
+  separator("Step 3: 本地发现详情页结构");
+
+  const $ = load(detailPage.html);
+  const manualScopes = parseSelectorList(DETAIL_SCOPE);
+  const candidates = discoverDetailCandidates($, detailPage.finalUrl, manualScopes);
+
+  if (candidates.length === 0) {
+    throw new Error("未发现可用的详情候选，请检查详情页结构。");
+  }
+
+  debugLog("详情候选 Top 5:");
+  for (const item of candidates.slice(0, 5)) {
+    debugLog(JSON.stringify({ score: item.score, reason: item.reason, candidate: item.candidate }, null, 2));
+  }
+
+  return candidates[0].candidate;
+}
+
+async function extractDetailResult(detailPage: PageSnapshot, selectors: NewsDetailSelectorSet): Promise<NormalizedDetailResult> {
+  separator("Step 4: 提取并验证详情页");
+
+  const $ = load(detailPage.html);
+  const extracted = extractDetailResultWithSelectors($, detailPage.finalUrl, selectors);
+  let content = extracted.content;
+  let attachmentUrl = extracted.attachmentUrl;
+
+  if (!content) {
+    const markdown = detailPage.markdown || (await fetchMarkdown(detailPage.finalUrl));
+    content = markdown;
+  }
+
+  if (!attachmentUrl) {
+    attachmentUrl = findAttachmentUrlInHtml(detailPage.html, detailPage.finalUrl);
+  }
+
+  if (!attachmentUrl && detailPage.rawHtml) {
+    attachmentUrl = findAttachmentUrlInHtml(detailPage.rawHtml, detailPage.finalUrl);
+  }
+
+  if (!attachmentUrl) {
+    try {
+      const rawHtml = await fetchRawHtml(detailPage.finalUrl);
+      attachmentUrl = findAttachmentUrlInHtml(rawHtml, detailPage.finalUrl);
+    } catch {
+      // Ignore raw fallback failure.
+    }
+  }
+
+  debugLog("详情选择器:", JSON.stringify(selectors, null, 2));
+  debugLog("正文长度:", content.length);
+  debugLog("正文预览:", content.slice(0, 500));
+  debugLog("附件地址:", attachmentUrl || "(无)");
+
+  return { content, attachmentUrl };
+}
+
+function assembleSiteSpec(listSelectors: NewsListSelectorSet, detailSelectors: NewsDetailSelectorSet): SiteSpec {
+  const dateField = listSelectors.dateSelector
+    ? {
+        date: {
+          selector: listSelectors.dateSelector,
+          type: "text" as const,
+          normalize: {
+            trim: true,
+            collapseWhitespace: true,
+          },
+        },
+      }
+    : {};
+
+  const attachment =
+    detailSelectors.attachmentSelector || detailSelectors.attachmentPattern
+      ? {
+          selector: detailSelectors.attachmentSelector,
+          source: detailSelectors.attachmentSource,
+          attribute: detailSelectors.attachmentAttribute,
+          pattern: detailSelectors.attachmentPattern || undefined,
+          patternFlags: detailSelectors.attachmentPattern ? "i" : undefined,
+          resolveUrl: true,
+        }
+      : undefined;
+
+  return {
+    name: "Crawl4AI-Discovered-Site-Spec",
+    listPage: {
+      url: LIST_URL,
+      baseSelector: listSelectors.baseSelector,
+      fields: {
+        title: {
+          selector: listSelectors.titleSelector,
+          type: "text",
+          normalize: {
+            trim: true,
+            collapseWhitespace: true,
+            stripLeadingField: "date",
+          },
+        },
+        url: {
+          selector: listSelectors.urlSelector,
+          type: "attribute",
+          attribute: "href",
+          normalize: {
+            trim: true,
+            resolveUrl: true,
+          },
+        },
+        ...dateField,
+      },
+    },
+    detailPage: {
+      contentSelector: detailSelectors.contentSelector,
+      contentType: "html",
+      attachment,
+    },
+  };
+}
+
+async function saveSiteSpec(siteSpec: SiteSpec) {
+  await Bun.write(SITE_SPEC_PATH, `${JSON.stringify(siteSpec, null, 2)}\n`);
+}
+
+async function validateSiteSpec(listPage: PageSnapshot, detailPage: PageSnapshot, siteSpec: SiteSpec) {
+  separator("Step 5: 端到端验证");
+
+  const listSelectors: NewsListSelectorSet = {
+    baseSelector: siteSpec.listPage.baseSelector,
+    titleSelector: siteSpec.listPage.fields.title.selector,
+    urlSelector: siteSpec.listPage.fields.url.selector,
+    dateSelector: siteSpec.listPage.fields.date?.selector ?? "",
+    score: 0,
+    reason: "site_spec",
+    heading: "",
+  };
+
+  const detailSelectors: NewsDetailSelectorSet = {
+    contentSelector: siteSpec.detailPage.contentSelector,
+    attachmentSelector: siteSpec.detailPage.attachment?.selector ?? "",
+    attachmentSource: siteSpec.detailPage.attachment?.source ?? "text",
+    attachmentAttribute: siteSpec.detailPage.attachment?.attribute,
+    attachmentPattern: siteSpec.detailPage.attachment?.pattern ?? "",
+    score: 0,
+    reason: "site_spec",
+  };
+
+  const listItems = extractListItems(listPage, listSelectors);
+  const detailResult = await extractDetailResult(detailPage, detailSelectors);
+
+  return {
+    listCount: listItems.length,
+    detailLength: detailResult.content.length,
+    attachmentUrl: detailResult.attachmentUrl,
+  };
+}
+
+async function main() {
+  console.log(
+    `开始执行站点发现。列表页=${LIST_URL}，列表 scope=${LIST_SCOPE || "(自动)"}，详情 scope=${DETAIL_SCOPE || "(自动)"}`,
+  );
+
+  const listPage = await fetchPageSnapshot(LIST_URL);
+  const listSelectors = await discoverListSelectors(listPage);
+  const listItems = extractListItems(listPage, listSelectors);
+
+  if (listItems.length === 0) {
+    console.error("列表提取失败，未得到任何列表项。");
+    process.exit(1);
+  }
+
+  const firstItemUrl = listItems[0]?.url ?? "";
+  if (!firstItemUrl) {
+    console.error("未能解析出第一条详情页 URL。");
+    process.exit(1);
+  }
+
+  const detailPage = await fetchPageSnapshot(firstItemUrl);
+  const detailSelectors = await discoverDetailSelectors(detailPage);
+  const detailResult = await extractDetailResult(detailPage, detailSelectors);
+  const siteSpec = assembleSiteSpec(listSelectors, detailSelectors);
+  await saveSiteSpec(siteSpec);
+  const validation = await validateSiteSpec(listPage, detailPage, siteSpec);
+
+  console.log(`采集完成：列表 ${listItems.length} 条，第一条详情页为 ${firstItemUrl}。`);
+  console.log(`详情内容长度：${detailResult.content.length}，附件下载地址：${detailResult.attachmentUrl || "(无)"}`);
+  console.log(`site_spec 已保存到 ${SITE_SPEC_PATH}`);
+
+  debugSeparator("最终结果");
+  debugLog(
+    JSON.stringify(
+      {
+        listSelectors,
+        firstListItem: listItems[0],
+        detailSelectors,
+        validation,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+main().catch((error) => {
+  console.error("脚本出错:", error);
+  process.exit(1);
+});

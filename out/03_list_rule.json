@@ -1,0 +1,28 @@
+{
+  "render": "static",
+  "list_extraction": {
+    "strategy": "css",
+    "container": ".n_right",
+    "item": ".n_right a",
+    "fields": {
+      "title": {
+        "selector": "",
+        "attr": "text"
+      },
+      "url": {
+        "selector": "",
+        "attr": "href"
+      },
+      "date": {
+        "selector": "",
+        "attr": "text",
+        "format": "YYYY-MM-DD"
+      }
+    },
+    "pagination": {
+      "enabled": false,
+      "next_page_selector": ""
+    }
+  },
+  "error": false
+}

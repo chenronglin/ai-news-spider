@@ -1,0 +1,16 @@
+{
+  "score": 10,
+  "passed": false,
+  "metrics": {
+    "total_items": 1,
+    "title_hit": 0,
+    "url_hit": 0,
+    "date_hit": 0
+  },
+  "reasons": [
+    "抽取到的列表项太少：1",
+    "title 命中率偏低：0/1",
+    "url 命中率偏低：0/1",
+    "date 命中率偏低：0/1"
+  ]
+}

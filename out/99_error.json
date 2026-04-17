@@ -1,0 +1,4 @@
+{
+  "error": "LLM job result is empty list: {'task_id': 'llm_1776314978_140025053335952', 'status': 'completed', 'created_at': '2026-04-16T04:49:38.436096', 'url': 'https://cmm.ncut.edu.cn/index/tzgg.htm', '_links': {'self': {'href': 'http://118.195.150.71:11235//llm/llm_1776314978_140025053335952'}, 'refresh': {'href': 'http://118.195.150.71:11235//llm/llm_1776314978_140025053335952'}}, 'result': []}",
+  "type": "Crawl4AIError"
+}
